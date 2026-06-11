@@ -746,13 +746,15 @@ fun getRecentlyAddedItems(animeList: List<Anime>): List<RecentlyAddedItem> {
             isSameDay(calendar, todayCalendar) -> "Today"
             isSameDay(calendar, yesterdayCalendar) -> "Yesterday"
             else -> {
-                val sdf = java.text.SimpleDateFormat("MMMM d", java.util.Locale.US)
+                val sdf = java.text.SimpleDateFormat("MMMM d", java.util.Locale.getDefault())
+                sdf.timeZone = java.util.TimeZone.getDefault()
                 sdf.format(calendar.time)
             }
         }
         
         // Formatter for time
-        val timeSdf = java.text.SimpleDateFormat("h:mm a", java.util.Locale.US)
+        val timeSdf = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
+        timeSdf.timeZone = java.util.TimeZone.getDefault()
         val timeLabel = timeSdf.format(calendar.time)
         
         // Subtitle line

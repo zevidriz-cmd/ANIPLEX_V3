@@ -31,6 +31,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -1522,30 +1525,34 @@ fun ExoVideoPlayer(
                         )
                     }
                     .pointerInput(Unit) {
-                        val edgeThreshold = 50.dp.toPx()
+                        val edgeThresholdPx = 50.dp.toPx()
                         var dragStartValue = 0f
                         var isLeftHalf = false
-                        var isDraggingValid = false
-                        detectDragGestures(
-                            onDragStart = { offset ->
+
+                        awaitPointerEventScope {
+                            while (true) {
+                                val down = awaitFirstDown(requireUnconsumed = false)
                                 val screenWidth = size.width
                                 val screenHeight = size.height
-                                val x = offset.x
-                                val y = offset.y
+                                val startX = down.position.x
+                                val startY = down.position.y
 
-                                if (x < edgeThreshold || x > screenWidth - edgeThreshold ||
-                                    y < edgeThreshold || y > screenHeight - edgeThreshold) {
-                                    isDraggingValid = false
-                                    return@detectDragGestures
+                                // Completely ignore touches starting near the screen edges
+                                // so they are allowed to propagate to system/back gestures
+                                if (startX < edgeThresholdPx || startX > screenWidth - edgeThresholdPx ||
+                                    startY < edgeThresholdPx || startY > screenHeight - edgeThresholdPx) {
+                                    do {
+                                        val event = awaitPointerEvent()
+                                    } while (event.changes.any { it.pressed })
+                                    continue
                                 }
 
-                                isDraggingValid = true
-                                val halfWidth = screenWidth / 2
-                                isLeftHalf = x < halfWidth
-                                
+                                val halfWidth = screenWidth / 2f
+                                isLeftHalf = startX < halfWidth
+
                                 val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
                                 val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-                                
+
                                 if (isLeftHalf) {
                                     val lp = activity?.window?.attributes
                                     val currentBrightness = lp?.screenBrightness ?: -1f
@@ -1554,52 +1561,62 @@ fun ExoVideoPlayer(
                                     val currentVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
                                     dragStartValue = currentVol.toFloat() / maxVolume.toFloat()
                                 }
-                                callbacks.onGestureChanged(
-                                    if (isLeftHalf) "brightness" else "volume",
-                                    dragStartValue,
-                                    true
-                                )
-                            },
-                            onDrag = { change, dragAmount ->
-                                if (!isDraggingValid) return@detectDragGestures
 
-                                val x = change.position.x
-                                val y = change.position.y
-                                val screenWidth = size.width
-                                val screenHeight = size.height
+                                var currentPointerId = down.id
+                                var hasTriggeredDrag = false
 
-                                if (x < edgeThreshold || x > screenWidth - edgeThreshold ||
-                                    y < edgeThreshold || y > screenHeight - edgeThreshold) {
-                                    return@detectDragGestures
-                                }
-
-                                change.consume()
-                                val delta = -dragAmount.y / screenHeight.toFloat()
-                                
-                                val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-                                val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-                                
-                                if (isLeftHalf) {
-                                    val newBrightness = (dragStartValue + delta).coerceIn(0.01f, 1f)
-                                    dragStartValue = newBrightness
-                                    activity?.runOnUiThread {
-                                        val lp = activity.window.attributes
-                                        lp.screenBrightness = newBrightness
-                                        activity.window.attributes = lp
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    val change = event.changes.firstOrNull { it.id == currentPointerId }
+                                    if (change == null || change.isConsumed) {
+                                        break
                                     }
-                                    callbacks.onGestureChanged("brightness", newBrightness, true)
-                                } else {
-                                    val newVolumeFraction = (dragStartValue + delta).coerceIn(0f, 1f)
-                                    dragStartValue = newVolumeFraction
-                                    val targetVolume = (newVolumeFraction * maxVolume).toInt()
-                                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVolume, 0)
-                                    callbacks.onGestureChanged("volume", newVolumeFraction, true)
+                                    if (change.changedToUp()) {
+                                        break
+                                    }
+
+                                    val currentX = change.position.x
+                                    val currentY = change.position.y
+
+                                    val dragAmountY = change.position.y - change.previousPosition.y
+                                    val dragAmountX = change.position.x - change.previousPosition.x
+
+                                    if (!hasTriggeredDrag) {
+                                        val diffY = kotlin.math.abs(currentY - startY)
+                                        val diffX = kotlin.math.abs(currentX - startX)
+                                        if (diffY > 15 && diffY > diffX) {
+                                            hasTriggeredDrag = true
+                                            callbacks.onGestureChanged(
+                                                if (isLeftHalf) "brightness" else "volume",
+                                                dragStartValue,
+                                                true
+                                            )
+                                        }
+                                    }
+
+                                    if (hasTriggeredDrag) {
+                                        change.consume()
+                                        val delta = -dragAmountY / screenHeight.toFloat()
+                                        if (isLeftHalf) {
+                                            val newBrightness = (dragStartValue + delta).coerceIn(0.01f, 1f)
+                                            dragStartValue = newBrightness
+                                            activity?.runOnUiThread {
+                                                val lp = activity.window.attributes
+                                                lp.screenBrightness = newBrightness
+                                                activity.window.attributes = lp
+                                            }
+                                            callbacks.onGestureChanged("brightness", newBrightness, true)
+                                        } else {
+                                            val newVolumeFraction = (dragStartValue + delta).coerceIn(0f, 1f)
+                                            dragStartValue = newVolumeFraction
+                                            val targetVolume = (newVolumeFraction * maxVolume).toInt()
+                                            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVolume, 0)
+                                            callbacks.onGestureChanged("volume", newVolumeFraction, true)
+                                        }
+                                    }
                                 }
-                            },
-                            onDragEnd = {
-                                isDraggingValid = false
                             }
-                        )
+                        }
                     }
             )
 

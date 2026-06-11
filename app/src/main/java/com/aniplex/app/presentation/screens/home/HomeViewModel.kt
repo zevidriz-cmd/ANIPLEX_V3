@@ -183,8 +183,8 @@ class HomeViewModel @Inject constructor(
                             
                             RecentlyAddedItem(
                                 anime = anime,
-                                dayLabel = label,
-                                timeLabel = formatTimeTo12Hour(schedule.time),
+                                dayLabel = formatLocalDay(timestamp),
+                                timeLabel = formatLocalTime(timestamp),
                                 timestamp = timestamp,
                                 subtitleText = epsText
                             )
@@ -200,6 +200,36 @@ class HomeViewModel @Inject constructor(
             val sortedList = itemsList.distinctBy { it.anime.id }.sortedByDescending { it.timestamp }
             _recentlyAddedEpisodes.value = sortedList
         }
+    }
+
+    private fun formatLocalTime(timestamp: Long): String {
+        val sdf = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
+        sdf.timeZone = java.util.TimeZone.getDefault()
+        return sdf.format(java.util.Date(timestamp))
+    }
+
+    private fun formatLocalDay(timestamp: Long): String {
+        val itemCalendar = java.util.Calendar.getInstance()
+        itemCalendar.timeInMillis = timestamp
+
+        val todayCalendar = java.util.Calendar.getInstance()
+        val yesterdayCalendar = java.util.Calendar.getInstance()
+        yesterdayCalendar.add(java.util.Calendar.DAY_OF_YEAR, -1)
+
+        return when {
+            isSameDay(itemCalendar, todayCalendar) -> "Today"
+            isSameDay(itemCalendar, yesterdayCalendar) -> "Yesterday"
+            else -> {
+                val sdfDisplay = java.text.SimpleDateFormat("MMMM d", java.util.Locale.getDefault())
+                sdfDisplay.timeZone = java.util.TimeZone.getDefault()
+                sdfDisplay.format(java.util.Date(timestamp))
+            }
+        }
+    }
+
+    private fun isSameDay(cal1: java.util.Calendar, cal2: java.util.Calendar): Boolean {
+        return cal1.get(java.util.Calendar.YEAR) == cal2.get(java.util.Calendar.YEAR) &&
+               cal1.get(java.util.Calendar.DAY_OF_YEAR) == cal2.get(java.util.Calendar.DAY_OF_YEAR)
     }
 
     private fun parseScheduleItemTimestamp(dateString: String, timeString: String): Long? {
