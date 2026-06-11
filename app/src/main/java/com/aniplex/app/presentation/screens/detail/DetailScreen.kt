@@ -75,6 +75,7 @@ import com.aniplex.app.theme.GoldStar
 import com.aniplex.app.theme.NetflixRed
 import com.aniplex.app.theme.SurfaceDark
 import com.aniplex.app.theme.SurfaceDarkVariant
+import com.aniplex.app.theme.TextSecondary
 
 @Composable
 fun DetailScreen(
@@ -94,6 +95,7 @@ fun DetailScreen(
     val userRating by viewModel.userRating.collectAsStateWithLifecycle()
     val seasonsState by viewModel.seasonsState.collectAsStateWithLifecycle()
     val resolvedAnikotoId by viewModel.resolvedAnikotoId.collectAsStateWithLifecycle()
+    val isResolvingSeason by viewModel.isResolvingSeason.collectAsStateWithLifecycle()
 
     // Load the selected season smoothly by popping the current screen and pushing a new one
     LaunchedEffect(resolvedAnikotoId) {
@@ -197,6 +199,50 @@ fun DetailScreen(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back",
                             tint = Color.White
+                        )
+                    }
+                }
+            }
+        }
+
+        if (isResolvingSeason) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.75f))
+                    .clickable(enabled = false) {},
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = SurfaceDarkVariant),
+                    modifier = Modifier
+                        .padding(32.dp)
+                        .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(16.dp)),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        CircularProgressIndicator(
+                            color = CrunchyrollOrange,
+                            strokeWidth = 3.dp,
+                            modifier = Modifier.size(36.dp)
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = "SWITCHING SEASON...",
+                            color = CrunchyrollOrange,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.2.sp
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Retrieving and preparing requested season details dynamically.",
+                            color = Color.White.copy(alpha = 0.8f),
+                            fontSize = 13.sp,
+                            textAlign = TextAlign.Center
                         )
                     }
                 }
@@ -752,109 +798,301 @@ fun DetailContent(
                             // Current selected season is the one that matches this anime's title or the first one if we can't figure it out
                             val currentSeason = seasons.find { it.malId == animeDetail.malId } ?: seasons.firstOrNull()
                             
-                            Column(
+                            Card(
                                 modifier = Modifier
                                     .padding(horizontal = 16.dp, vertical = 8.dp)
                                     .fillMaxWidth()
-                                    .background(SurfaceDarkVariant, RoundedCornerShape(8.dp))
-                                    .animateContentSize()
+                                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+                                    .animateContentSize(),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = SurfaceDarkVariant
+                                )
+                            ) {
+                                Column(modifier = Modifier.fillMaxWidth()) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { expanded = !expanded }
+                                            .padding(horizontal = 16.dp, vertical = 14.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .clip(CircleShape)
+                                                .background(CrunchyrollOrange)
+                                        )
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "SELECT SEASON",
+                                                color = TextSecondary,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                letterSpacing = 1.sp
+                                            )
+                                            Spacer(modifier = Modifier.height(2.dp))
+                                            Text(
+                                                text = currentSeason?.title?.takeIf { it.isNotBlank() } ?: animeDetail.name,
+                                                color = Color.White,
+                                                fontSize = 15.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = { onSeasonRetry() },
+                                            modifier = Modifier.size(36.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Replay,
+                                                contentDescription = "Sync Seasons",
+                                                tint = CrunchyrollOrange,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Icon(
+                                            imageVector = Icons.Default.ArrowDropDown,
+                                            contentDescription = "Toggle Seasons List",
+                                            tint = Color.White.copy(alpha = 0.8f),
+                                            modifier = Modifier
+                                                .size(28.dp)
+                                                .graphicsLayer {
+                                                    rotationZ = if (expanded) 180f else 0f
+                                                }
+                                        )
+                                    }
+                                    
+                                    AnimatedVisibility(
+                                        visible = expanded,
+                                        enter = fadeIn() + expandVertically(),
+                                        exit = fadeOut() + shrinkVertically()
+                                    ) {
+                                        Column(modifier = Modifier.fillMaxWidth()) {
+                                            HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+                                            seasons.forEachIndexed { idx, season ->
+                                                val isCurrent = season.malId == animeDetail.malId
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .background(
+                                                            if (isCurrent) Color.White.copy(alpha = 0.04f) else Color.Transparent
+                                                        )
+                                                        .clickable {
+                                                            expanded = false
+                                                            if (!isCurrent) {
+                                                                onSeasonSelected(season.malId)
+                                                            }
+                                                        }
+                                                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                                                ) {
+                                                    Text(
+                                                        text = "S${idx + 1}",
+                                                        color = if (isCurrent) CrunchyrollOrange else TextSecondary,
+                                                        fontSize = 12.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        modifier = Modifier
+                                                            .width(36.dp)
+                                                            .background(
+                                                                if (isCurrent) CrunchyrollOrange.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.05f),
+                                                                RoundedCornerShape(4.dp)
+                                                            )
+                                                            .padding(vertical = 2.dp, horizontal = 4.dp),
+                                                        textAlign = TextAlign.Center
+                                                    )
+                                                    Spacer(modifier = Modifier.width(12.dp))
+                                                    Text(
+                                                        text = season.title.takeIf { it.isNotBlank() } ?: (animeDetail.name + if (season.seasonNumber > 1) " Season ${season.seasonNumber}" else ""),
+                                                        color = if (isCurrent) CrunchyrollOrange else Color.White,
+                                                        fontSize = 14.sp,
+                                                        fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                                        modifier = Modifier.weight(1f),
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                    if (isCurrent) {
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .background(CrunchyrollOrange.copy(alpha = 0.1f), RoundedCornerShape(4.dp))
+                                                                .border(1.dp, CrunchyrollOrange.copy(alpha = 0.3f), RoundedCornerShape(4.dp))
+                                                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                                        ) {
+                                                            Text(
+                                                                text = "ACTIVE",
+                                                                color = CrunchyrollOrange,
+                                                                fontSize = 9.sp,
+                                                                fontWeight = FontWeight.Bold
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                                if (idx < seasons.size - 1) {
+                                                    HorizontalDivider(color = Color.White.copy(alpha = 0.04f))
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            // Empty Success State: gracefully show a subtle informative card
+                            Box(
+                                modifier = Modifier
+                                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                                    .fillMaxWidth()
+                                    .background(SurfaceDarkVariant, RoundedCornerShape(12.dp))
+                                    .border(1.dp, Color.White.copy(alpha = 0.06f), RoundedCornerShape(12.dp))
+                                    .padding(horizontal = 16.dp, vertical = 6.dp)
                             ) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable { expanded = !expanded }
-                                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                                    modifier = Modifier.fillMaxWidth()
                                 ) {
+                                    Spacer(modifier = Modifier.width(16.dp))
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(CrunchyrollOrange.copy(alpha = 0.5f))
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
                                     Text(
-                                        text = currentSeason?.title?.takeIf { it.isNotBlank() } ?: animeDetail.name,
-                                        color = Color.White,
-                                        fontSize = 16.sp,
+                                        text = "Single Season Release",
+                                        color = TextSecondary,
+                                        fontSize = 14.sp,
                                         fontWeight = FontWeight.Medium,
                                         modifier = Modifier.weight(1f)
                                     )
-                                    Icon(
-                                        imageVector = Icons.Default.ArrowDropDown,
-                                        contentDescription = "Select Season",
-                                        tint = Color.White,
-                                        modifier = Modifier.graphicsLayer {
-                                            rotationZ = if (expanded) 180f else 0f
-                                        }
-                                    )
-                                }
-                                
-                                AnimatedVisibility(
-                                    visible = expanded,
-                                    enter = fadeIn() + expandVertically(),
-                                    exit = fadeOut() + shrinkVertically()
-                                ) {
-                                    Column(modifier = Modifier.fillMaxWidth()) {
-                                        HorizontalDivider(color = Color.White.copy(alpha = 0.1f))
-                                        seasons.forEach { season ->
-                                            Text(
-                                                text = season.title.takeIf { it.isNotBlank() } ?: (animeDetail.name + if (season.seasonNumber > 1) " Season ${season.seasonNumber}" else ""),
-                                                color = if (season.malId == animeDetail.malId) CrunchyrollOrange else Color.White,
-                                                fontSize = 15.sp,
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .clickable {
-                                                        expanded = false
-                                                        if (season.malId != animeDetail.malId) {
-                                                            onSeasonSelected(season.malId)
-                                                        }
-                                                    }
-                                                    .padding(horizontal = 16.dp, vertical = 14.dp)
-                                            )
-                                        }
+                                    IconButton(
+                                        onClick = { onSeasonRetry() },
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Replay,
+                                            contentDescription = "Sync Seasons",
+                                            tint = CrunchyrollOrange,
+                                            modifier = Modifier.size(18.dp)
+                                        )
                                     }
+                                    Spacer(modifier = Modifier.width(4.dp))
                                 }
                             }
                         }
                     }
                     is DetailState.Loading -> {
-                        // Show a loading indicator for seasons
-                        Row(
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            CircularProgressIndicator(color = CrunchyrollOrange, modifier = Modifier.size(24.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Loading seasons...", color = Color.Gray, fontSize = 14.sp)
-                        }
-                    }
-                    is DetailState.Error -> {
-                        Row(
+                        // Premium beautiful shimmering/indicator card
+                        Card(
                             modifier = Modifier
                                 .padding(horizontal = 16.dp, vertical = 8.dp)
                                 .fillMaxWidth()
-                                .background(SurfaceDarkVariant, RoundedCornerShape(8.dp))
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                                .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp)),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(containerColor = SurfaceDarkVariant)
                         ) {
                             Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.Replay,
-                                    contentDescription = "Retry Icon",
-                                    tint = CrunchyrollOrange,
-                                    modifier = Modifier.size(20.dp)
+                                CircularProgressIndicator(
+                                    color = CrunchyrollOrange,
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.5.dp
                                 )
                                 Spacer(modifier = Modifier.width(12.dp))
-                                Text(
-                                    text = "Failed to load seasons",
-                                    color = Color.White.copy(alpha = 0.8f),
-                                    fontSize = 14.sp
-                                )
+                                Column {
+                                    Text(
+                                        text = "SYNCING SEASONS",
+                                        color = CrunchyrollOrange,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 1.sp
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "Connecting to database...",
+                                        color = Color.White.copy(alpha = 0.7f),
+                                        fontSize = 13.sp
+                                    )
+                                }
                             }
-                            TextButton(
-                                onClick = { onSeasonRetry() },
-                                colors = ButtonDefaults.textButtonColors(contentColor = CrunchyrollOrange),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                        }
+                    }
+                    is DetailState.Error -> {
+                        // Polished Modern Error State with large retry CTA card
+                        Card(
+                            modifier = Modifier
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                                .fillMaxWidth()
+                                .border(1.dp, Color.Red.copy(alpha = 0.15f), RoundedCornerShape(12.dp)),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(containerColor = SurfaceDarkVariant)
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp)
                             ) {
-                                Text("Retry", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Replay,
+                                        contentDescription = "Syncing Error",
+                                        tint = Color(0xFFFF5252),
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Text(
+                                        text = "Seasons Offline",
+                                        color = Color.White,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "Failed to sync related seasons. Server connection might be slow or rate-limited.",
+                                    color = TextSecondary,
+                                    fontSize = 12.sp,
+                                    lineHeight = 16.sp
+                                )
+                                Spacer(modifier = Modifier.height(14.dp))
+                                Button(
+                                    onClick = { onSeasonRetry() },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(40.dp),
+                                    shape = RoundedCornerShape(20.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = CrunchyrollOrange,
+                                        contentColor = Color.Black
+                                    )
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Replay,
+                                            contentDescription = "Retry",
+                                            tint = Color.Black,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            "Retry Syncing",
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

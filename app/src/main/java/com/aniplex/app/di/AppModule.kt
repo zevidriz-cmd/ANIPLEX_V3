@@ -53,8 +53,8 @@ object AppModule {
                     .build()
                 chain.proceed(requestWithUserAgent)
             }
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(15, TimeUnit.SECONDS)
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
             .build()
     }
 

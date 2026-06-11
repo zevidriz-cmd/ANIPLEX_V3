@@ -22,7 +22,7 @@ interface AnimeRepository {
         language: String?,
         page: Int
     ): Flow<Result<List<Anime>>>
-    fun getSeasons(malId: String): Flow<Result<List<Season>>>
+    fun getSeasons(malId: String, forceRefresh: Boolean = false): Flow<Result<List<Season>>>
     fun resolveMAL(malId: String): Flow<Result<String>>
     suspend fun getCachedAnimeDetail(id: String): AnimeDetail?
 }

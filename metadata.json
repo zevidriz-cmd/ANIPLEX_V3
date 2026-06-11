@@ -1,6 +1,6 @@
 {
-  "name": "",
-  "description": "",
+  "name": "ANIPLEX",
+  "description": "Stream your favorite anime, search details, check season schedules, manage your watchlist and history, and load details with high-performance caching.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

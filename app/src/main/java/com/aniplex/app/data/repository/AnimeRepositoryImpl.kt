@@ -12,8 +12,10 @@ import com.aniplex.app.data.remote.dto.SeasonsDataDto
 import com.aniplex.app.domain.model.*
 import com.aniplex.app.domain.repository.AnimeRepository
 import com.google.gson.Gson
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import java.io.IOException
 import javax.inject.Inject
 
@@ -416,7 +418,7 @@ class AnimeRepositoryImpl @Inject constructor(
         }
     }
 
-    override fun getSeasons(malId: String): Flow<Result<List<Season>>> = flow {
+    override fun getSeasons(malId: String, forceRefresh: Boolean): Flow<Result<List<Season>>> = flow {
         if (malId.isBlank()) {
             emit(Result.Success(emptyList()))
             return@flow
@@ -428,7 +430,7 @@ class AnimeRepositoryImpl @Inject constructor(
         val currentTime = System.currentTimeMillis()
         val SEASONS_CACHE_LIFETIME = 7 * 24 * 60 * 60 * 1000L // 7 days
 
-        if (cachedEntity != null) {
+        if (cachedEntity != null && !forceRefresh) {
             try {
                 val cachedResponse = gson.fromJson(cachedEntity.jsonContent, SeasonsResponse::class.java)
                 val seasons = cachedResponse.data.seasons?.map { it.toDomain() } ?: emptyList()
@@ -444,8 +446,27 @@ class AnimeRepositoryImpl @Inject constructor(
         }
 
         try {
-            val response = apiService.getSeasons(malId)
-            if (response.success) {
+            var response: SeasonsResponse? = null
+            var lastException: Exception? = null
+            val maxRetries = 3
+            for (attempt in 1..maxRetries) {
+                try {
+                    val apiResponse = apiService.getSeasons(malId)
+                    if (apiResponse.success) {
+                        response = apiResponse
+                        break
+                    } else if (attempt < maxRetries) {
+                        kotlinx.coroutines.delay(1000L * attempt)
+                    }
+                } catch (e: Exception) {
+                    lastException = e
+                    if (attempt < maxRetries) {
+                        kotlinx.coroutines.delay(1000L * attempt)
+                    }
+                }
+            }
+
+            if (response != null && response.success) {
                 val seasons = response.data.seasons?.map { it.toDomain() } ?: emptyList()
                 
                 // Cache this seasons list NOT ONLY under the requested malId,
@@ -475,7 +496,8 @@ class AnimeRepositoryImpl @Inject constructor(
                 }
                 emit(Result.Success(seasons))
             } else {
-                emit(Result.Success(emptyList()))
+                val errorMsg = lastException?.localizedMessage ?: "Failed to fetch seasons"
+                emit(Result.Error(errorMsg))
             }
         } catch (e: Exception) {
             if (cachedEntity != null) {
@@ -484,13 +506,13 @@ class AnimeRepositoryImpl @Inject constructor(
                     val seasons = cachedResponse.data.seasons?.map { it.toDomain() } ?: emptyList()
                     emit(Result.Success(seasons))
                 } catch (jsonEx: Exception) {
-                    emit(Result.Success(emptyList()))
+                    emit(Result.Error(e.localizedMessage ?: "Failed to fetch seasons"))
                 }
             } else {
-                emit(Result.Success(emptyList()))
+                emit(Result.Error(e.localizedMessage ?: "Failed to fetch seasons"))
             }
         }
-    }
+    }.flowOn(Dispatchers.IO)
 
     override fun resolveMAL(malId: String): Flow<Result<String>> = flow {
         if (malId.isBlank()) {
@@ -544,7 +566,7 @@ class AnimeRepositoryImpl @Inject constructor(
                 emit(Result.Error(e.localizedMessage ?: "Failed to resolve MAL ID"))
             }
         }
-    }
+    }.flowOn(Dispatchers.IO)
 
     override suspend fun getCachedAnimeDetail(id: String): AnimeDetail? {
         val cachedEntity = cacheDao.getCache("detail_$id") ?: return null

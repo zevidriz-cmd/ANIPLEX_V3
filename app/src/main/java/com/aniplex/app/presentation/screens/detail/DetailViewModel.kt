@@ -58,6 +58,9 @@ class DetailViewModel @Inject constructor(
     private val _resolvedAnikotoId = MutableStateFlow<String?>(null)
     val resolvedAnikotoId: StateFlow<String?> = _resolvedAnikotoId.asStateFlow()
 
+    private val _isResolvingSeason = MutableStateFlow(false)
+    val isResolvingSeason: StateFlow<Boolean> = _isResolvingSeason.asStateFlow()
+
     private val _resolutionError = MutableStateFlow<String?>(null)
     val resolutionError: StateFlow<String?> = _resolutionError.asStateFlow()
 
@@ -268,13 +271,13 @@ class DetailViewModel @Inject constructor(
         }
     }
 
-    private fun loadSeasons(malId: String) {
+    private fun loadSeasons(malId: String, forceRefresh: Boolean = false) {
         if (malId.isBlank()) {
             _seasonsState.value = DetailState.Success(emptyList())
             return
         }
         viewModelScope.launch {
-            repository.getSeasons(malId).collect { result ->
+            repository.getSeasons(malId, forceRefresh).collect { result ->
                 when (result) {
                     is Result.Loading -> {
                         if (_seasonsState.value !is DetailState.Success) {
@@ -299,17 +302,22 @@ class DetailViewModel @Inject constructor(
         val malId = currentDetail?.malId
         if (!malId.isNullOrBlank()) {
             _seasonsState.value = DetailState.Loading
-            loadSeasons(malId)
+            loadSeasons(malId, forceRefresh = true)
         }
     }
 
     fun resolveMALAndNavigate(malId: String) {
         _resolvedAnikotoId.value = null
         _resolutionError.value = null
+        _isResolvingSeason.value = true
         viewModelScope.launch {
             repository.resolveMAL(malId).collect { result ->
                 when (result) {
+                    is Result.Loading -> {
+                        _isResolvingSeason.value = true
+                    }
                     is Result.Success -> {
+                        _isResolvingSeason.value = false
                         if (result.data != null) {
                             _resolvedAnikotoId.value = result.data
                         } else {
@@ -317,9 +325,9 @@ class DetailViewModel @Inject constructor(
                         }
                     }
                     is Result.Error -> {
+                        _isResolvingSeason.value = false
                         _resolutionError.value = result.message ?: "Failed to resolve season."
                     }
-                    else -> _resolvedAnikotoId.value = null
                 }
             }
         }

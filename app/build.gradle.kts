@@ -128,5 +128,5 @@ dependencies {
   implementation(libs.shimmer.compose)
 
   // Memory Leak Detection (Tooling)
-  debugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")
+  // debugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")
 }
