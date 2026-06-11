@@ -24,4 +24,5 @@ interface AnimeRepository {
     ): Flow<Result<List<Anime>>>
     fun getSeasons(malId: String): Flow<Result<List<Season>>>
     fun resolveMAL(malId: String): Flow<Result<String>>
+    suspend fun getCachedAnimeDetail(id: String): AnimeDetail?
 }

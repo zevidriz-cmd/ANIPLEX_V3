@@ -70,6 +70,18 @@ class DetailViewModel @Inject constructor(
         _detailState.value = DetailState.Loading
         _episodesState.value = DetailState.Loading
         _charactersState.value = DetailState.Loading
+        _seasonsState.value = DetailState.Loading
+
+        viewModelScope.launch {
+            try {
+                val cachedDetail = repository.getCachedAnimeDetail(animeId)
+                if (cachedDetail != null && cachedDetail.malId.isNotBlank()) {
+                    loadSeasons(cachedDetail.malId)
+                }
+            } catch (e: Exception) {
+                // Squelch
+            }
+        }
 
         viewModelScope.launch {
             // Load Anime Details
@@ -257,14 +269,37 @@ class DetailViewModel @Inject constructor(
     }
 
     private fun loadSeasons(malId: String) {
+        if (malId.isBlank()) {
+            _seasonsState.value = DetailState.Success(emptyList())
+            return
+        }
         viewModelScope.launch {
             repository.getSeasons(malId).collect { result ->
                 when (result) {
-                    is Result.Loading -> _seasonsState.value = DetailState.Loading
-                    is Result.Success -> _seasonsState.value = DetailState.Success(result.data)
-                    is Result.Error -> _seasonsState.value = DetailState.Success(emptyList())
+                    is Result.Loading -> {
+                        if (_seasonsState.value !is DetailState.Success) {
+                            _seasonsState.value = DetailState.Loading
+                        }
+                    }
+                    is Result.Success -> {
+                        _seasonsState.value = DetailState.Success(result.data)
+                    }
+                    is Result.Error -> {
+                        if (_seasonsState.value !is DetailState.Success) {
+                            _seasonsState.value = DetailState.Error(result.message)
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    fun retryLoadSeasons() {
+        val currentDetail = (detailState.value as? DetailState.Success)?.data
+        val malId = currentDetail?.malId
+        if (!malId.isNullOrBlank()) {
+            _seasonsState.value = DetailState.Loading
+            loadSeasons(malId)
         }
     }
 

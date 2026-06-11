@@ -7,6 +7,8 @@ import com.aniplex.app.data.remote.api.HiAnimeApiService
 import com.aniplex.app.data.remote.dto.AnimeDetailResponse
 import com.aniplex.app.data.remote.dto.EpisodesResponse
 import com.aniplex.app.data.remote.dto.HomeResponse
+import com.aniplex.app.data.remote.dto.SeasonsResponse
+import com.aniplex.app.data.remote.dto.SeasonsDataDto
 import com.aniplex.app.domain.model.*
 import com.aniplex.app.domain.repository.AnimeRepository
 import com.google.gson.Gson
@@ -415,31 +417,142 @@ class AnimeRepositoryImpl @Inject constructor(
     }
 
     override fun getSeasons(malId: String): Flow<Result<List<Season>>> = flow {
+        if (malId.isBlank()) {
+            emit(Result.Success(emptyList()))
+            return@flow
+        }
+        val cacheKey = "seasons_$malId"
         emit(Result.Loading)
+
+        val cachedEntity = cacheDao.getCache(cacheKey)
+        val currentTime = System.currentTimeMillis()
+        val SEASONS_CACHE_LIFETIME = 7 * 24 * 60 * 60 * 1000L // 7 days
+
+        if (cachedEntity != null) {
+            try {
+                val cachedResponse = gson.fromJson(cachedEntity.jsonContent, SeasonsResponse::class.java)
+                val seasons = cachedResponse.data.seasons?.map { it.toDomain() } ?: emptyList()
+                if (seasons.isNotEmpty()) {
+                    emit(Result.Success(seasons))
+                    if (currentTime - cachedEntity.timestamp < SEASONS_CACHE_LIFETIME) {
+                        return@flow
+                    }
+                }
+            } catch (e: Exception) {
+                // Fallback to network
+            }
+        }
+
         try {
             val response = apiService.getSeasons(malId)
             if (response.success) {
                 val seasons = response.data.seasons?.map { it.toDomain() } ?: emptyList()
+                
+                // Cache this seasons list NOT ONLY under the requested malId,
+                // but ALSO under the malId of EVERY single season in the list!
+                // This guarantees that all secondary seasons are linked to the exact same full list of seasons.
+                if (seasons.isNotEmpty()) {
+                    seasons.forEach { season ->
+                        try {
+                            val linkedResponse = SeasonsResponse(
+                                success = true,
+                                data = SeasonsDataDto(
+                                    seasons = response.data.seasons,
+                                    currentMalId = season.malId
+                                )
+                            )
+                            cacheDao.insertCache(
+                                CacheEntity(
+                                    cacheKey = "seasons_${season.malId}",
+                                    jsonContent = gson.toJson(linkedResponse),
+                                    timestamp = currentTime
+                                )
+                            )
+                        } catch (e: Exception) {
+                            // Non-blocking
+                        }
+                    }
+                }
                 emit(Result.Success(seasons))
             } else {
                 emit(Result.Success(emptyList()))
             }
         } catch (e: Exception) {
-            emit(Result.Success(emptyList())) // Gracefully degrade - no seasons is fine
+            if (cachedEntity != null) {
+                try {
+                    val cachedResponse = gson.fromJson(cachedEntity.jsonContent, SeasonsResponse::class.java)
+                    val seasons = cachedResponse.data.seasons?.map { it.toDomain() } ?: emptyList()
+                    emit(Result.Success(seasons))
+                } catch (jsonEx: Exception) {
+                    emit(Result.Success(emptyList()))
+                }
+            } else {
+                emit(Result.Success(emptyList()))
+            }
         }
     }
 
     override fun resolveMAL(malId: String): Flow<Result<String>> = flow {
+        if (malId.isBlank()) {
+            emit(Result.Error("Blank MAL ID"))
+            return@flow
+        }
+        val cacheKey = "resolve_mal_$malId"
         emit(Result.Loading)
+
+        val cachedEntity = cacheDao.getCache(cacheKey)
+        val currentTime = System.currentTimeMillis()
+        val RESOLVE_CACHE_LIFETIME = 30 * 24 * 60 * 60 * 1000L // 30 days
+
+        if (cachedEntity != null) {
+            try {
+                val resolvedId = cachedEntity.jsonContent
+                if (resolvedId.isNotBlank()) {
+                    emit(Result.Success(resolvedId))
+                    if (currentTime - cachedEntity.timestamp < RESOLVE_CACHE_LIFETIME) {
+                        return@flow
+                    }
+                }
+            } catch (e: Exception) {
+                // Fallback
+            }
+        }
+
         try {
             val response = apiService.resolveMAL(malId)
             if (response.success && response.data != null) {
-                emit(Result.Success(response.data.anikotoId))
+                val resolvedId = response.data.anikotoId
+                cacheDao.insertCache(
+                    CacheEntity(
+                        cacheKey = cacheKey,
+                        jsonContent = resolvedId,
+                        timestamp = currentTime
+                    )
+                )
+                emit(Result.Success(resolvedId))
             } else {
-                emit(Result.Error("Could not resolve MAL ID"))
+                if (cachedEntity != null) {
+                    emit(Result.Success(cachedEntity.jsonContent))
+                } else {
+                    emit(Result.Error("Could not resolve MAL ID"))
+                }
             }
         } catch (e: Exception) {
-            emit(Result.Error(e.localizedMessage ?: "Failed to resolve MAL ID"))
+            if (cachedEntity != null) {
+                emit(Result.Success(cachedEntity.jsonContent))
+            } else {
+                emit(Result.Error(e.localizedMessage ?: "Failed to resolve MAL ID"))
+            }
+        }
+    }
+
+    override suspend fun getCachedAnimeDetail(id: String): AnimeDetail? {
+        val cachedEntity = cacheDao.getCache("detail_$id") ?: return null
+        return try {
+            val cachedResponse = gson.fromJson(cachedEntity.jsonContent, AnimeDetailResponse::class.java)
+            cachedResponse.data.toDomain()
+        } catch (e: Exception) {
+            null
         }
     }
 }

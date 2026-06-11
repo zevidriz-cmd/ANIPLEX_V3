@@ -159,6 +159,7 @@ fun DetailScreen(
                     onWatchlistToggle = { viewModel.toggleWatchlist(state.data) },
                     onRatingSelected = { rating -> viewModel.setRating(animeId, rating) },
                     onSeasonSelected = { malId -> viewModel.resolveMALAndNavigate(malId) },
+                    onSeasonRetry = { viewModel.retryLoadSeasons() },
                     onMarkAsWatched = { viewModel.markAsWatched(state.data.id, state.data.name, state.data.poster) },
                     onRemoveFromHistory = { viewModel.removeFromHistory(state.data.id) },
                     modifier = Modifier.fillMaxSize()
@@ -219,6 +220,7 @@ fun DetailContent(
     onWatchlistToggle: () -> Unit,
     onRatingSelected: (Int) -> Unit,
     onSeasonSelected: (String) -> Unit,
+    onSeasonRetry: () -> Unit,
     onMarkAsWatched: () -> Unit,
     onRemoveFromHistory: () -> Unit,
     modifier: Modifier = Modifier
@@ -818,6 +820,42 @@ fun DetailContent(
                             CircularProgressIndicator(color = CrunchyrollOrange, modifier = Modifier.size(24.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                             Text("Loading seasons...", color = Color.Gray, fontSize = 14.sp)
+                        }
+                    }
+                    is DetailState.Error -> {
+                        Row(
+                            modifier = Modifier
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                                .fillMaxWidth()
+                                .background(SurfaceDarkVariant, RoundedCornerShape(8.dp))
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Replay,
+                                    contentDescription = "Retry Icon",
+                                    tint = CrunchyrollOrange,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(
+                                    text = "Failed to load seasons",
+                                    color = Color.White.copy(alpha = 0.8f),
+                                    fontSize = 14.sp
+                                )
+                            }
+                            TextButton(
+                                onClick = { onSeasonRetry() },
+                                colors = ButtonDefaults.textButtonColors(contentColor = CrunchyrollOrange),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                            ) {
+                                Text("Retry", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                            }
                         }
                     }
                     else -> {}
