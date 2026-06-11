@@ -31,6 +31,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.animation.core.*
 import coil.compose.AsyncImage
 import com.aniplex.app.domain.model.Anime
 import com.aniplex.app.presentation.components.AnimeCard
@@ -61,6 +69,8 @@ fun SearchScreen(
     var isSearchFieldFocused by remember { mutableStateOf(false) }
 
     val gridState = rememberLazyGridState()
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
 
     // Detect scrolling boundary for infinite paging
     val shouldLoadMore = remember {
@@ -88,7 +98,7 @@ fun SearchScreen(
         ) {
             Spacer(modifier = Modifier.height(16.dp))
 
-            // 1. Search Bar Outlined Input
+            // 1. Search Bar Outlined Input with keyboard controller support
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = {
@@ -134,6 +144,15 @@ fun SearchScreen(
                         }
                     }
                 },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(
+                    onSearch = {
+                        viewModel.performSearch()
+                        keyboardController?.hide()
+                        focusManager.clearFocus()
+                        isSearchFieldFocused = false
+                    }
+                ),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = CrunchyrollOrange,
                     unfocusedBorderColor = SurfaceDarkVariant,
@@ -146,6 +165,9 @@ fun SearchScreen(
                 singleLine = true,
                 modifier = Modifier
                     .fillMaxWidth()
+                    .onFocusChanged { state ->
+                        isSearchFieldFocused = state.isFocused
+                    }
             )
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -158,12 +180,15 @@ fun SearchScreen(
             ) {
                 when (val state = uiState) {
                     is SearchUiState.Idle -> {
-                        SearchIdleState()
+                        SearchIdleState(
+                            onGenreClick = { genre ->
+                                viewModel.toggleGenre(genre)
+                                viewModel.performSearch()
+                            }
+                        )
                     }
                     is SearchUiState.Loading -> {
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(color = CrunchyrollOrange)
-                        }
+                        SearchShimmerLoader()
                     }
                     is SearchUiState.Success -> {
                         LazyVerticalGrid(
@@ -174,7 +199,11 @@ fun SearchScreen(
                             modifier = Modifier.fillMaxSize()
                         ) {
                             items(state.results) { anime ->
-                                AnimeCard(anime = anime, onClick = onAnimeClick)
+                                AnimeCard(anime = anime, onClick = {
+                                    focusManager.clearFocus()
+                                    keyboardController?.hide()
+                                    onAnimeClick(it)
+                                })
                             }
                             if (state.hasNextPage) {
                                 item {
@@ -192,6 +221,7 @@ fun SearchScreen(
                     }
                     is SearchUiState.Empty -> {
                         SearchEmptyState(
+                            query = searchQuery,
                             onClearFilters = {
                                 viewModel.clearFilters()
                                 viewModel.onQueryChange("")
@@ -207,15 +237,15 @@ fun SearchScreen(
                     }
                 }
 
-                // 3. Debounced Suggestions Dropdown Overlay
+                // 3. Debounced Suggestions Dropdown Overlay with elegant glassmorphic dark design
                 androidx.compose.animation.AnimatedVisibility(
                     visible = isSearchFieldFocused && suggestions.isNotEmpty() && searchQuery.length >= 2,
                     enter = fadeIn(),
                     exit = fadeOut()
                 ) {
                     Card(
-                        colors = CardDefaults.cardColors(containerColor = SurfaceDark),
-                        border = BorderStroke(1.dp, SurfaceDarkVariant),
+                        colors = CardDefaults.cardColors(containerColor = SurfaceDark.copy(alpha = 0.98f)),
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
                             .fillMaxWidth()
@@ -229,8 +259,11 @@ fun SearchScreen(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
                                         .clickable {
                                             isSearchFieldFocused = false
+                                            focusManager.clearFocus()
+                                            keyboardController?.hide()
                                             onAnimeClick(item.id)
                                         }
                                         .padding(8.dp),
@@ -241,8 +274,8 @@ fun SearchScreen(
                                         contentDescription = null,
                                         contentScale = ContentScale.Crop,
                                         modifier = Modifier
-                                            .size(40.dp)
-                                            .clip(RoundedCornerShape(4.dp))
+                                            .size(42.dp)
+                                            .clip(RoundedCornerShape(6.dp))
                                     )
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Column(modifier = Modifier.weight(1f)) {
@@ -478,37 +511,94 @@ fun FilterSectionTitle(title: String) {
 }
 
 @Composable
-fun SearchIdleState() {
+fun SearchIdleState(onGenreClick: (String) -> Unit) {
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(horizontal = 24.dp)
+        ) {
+            val infiniteTransition = rememberInfiniteTransition(label = "idle_glow")
+            val pulseScale by infiniteTransition.animateFloat(
+                initialValue = 0.95f,
+                targetValue = 1.05f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(1800, easing = FastOutSlowInEasing),
+                    repeatMode = RepeatMode.Reverse
+                ),
+                label = "scale"
+            )
+
             Icon(
                 imageVector = Icons.Default.Search,
                 contentDescription = null,
-                tint = Color.DarkGray,
-                modifier = Modifier.size(80.dp)
+                tint = CrunchyrollOrange.copy(alpha = 0.15f),
+                modifier = Modifier
+                    .size(96.dp)
+                    .graphicsLayer {
+                        scaleX = pulseScale
+                        scaleY = pulseScale
+                    }
             )
             Spacer(modifier = Modifier.height(16.dp))
             Text(
                 text = "Discover Anime",
-                fontSize = 18.sp,
+                fontSize = 20.sp,
                 color = Color.White,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.5.sp
             )
+            Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "Type keywords or apply filters to get started",
+                text = "Type any keyword or browse popular genres below.",
                 fontSize = 13.sp,
                 color = Color.Gray,
-                modifier = Modifier.padding(top = 4.dp)
+                textAlign = TextAlign.Center
             )
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            Text(
+                text = "POPULAR GENRES",
+                color = CrunchyrollOrange,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = 1.5.sp,
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+
+            val popularGenres = listOf("action", "comedy", "fantasy", "sci-fi", "romance", "thriller")
+            OptFlowRow(
+                horizontalArrangement = Arrangement.Center,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                popularGenres.forEach { genre ->
+                    Box(
+                        modifier = Modifier
+                            .padding(horizontal = 4.dp)
+                            .background(SurfaceDark, RoundedCornerShape(18.dp))
+                            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(18.dp))
+                            .clickable { onGenreClick(genre) }
+                            .padding(horizontal = 14.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = genre.replaceFirstChar { it.uppercase() },
+                            color = Color.White.copy(alpha = 0.85f),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
         }
     }
 }
 
 @Composable
-fun SearchEmptyState(onClearFilters: () -> Unit) {
+fun SearchEmptyState(query: String, onClearFilters: () -> Unit) {
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
@@ -530,19 +620,28 @@ fun SearchEmptyState(onClearFilters: () -> Unit) {
                 color = Color.White,
                 fontWeight = FontWeight.Bold
             )
+            Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "We couldn't find any matching anime. Try clearing filters or searching for different keywords.",
+                text = if (query.isNotBlank()) "No anime found for \"$query\"" else "No anime matches the selected filters.",
                 fontSize = 13.sp,
                 color = Color.Gray,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(top = 6.dp)
+                textAlign = TextAlign.Center
             )
-            Spacer(modifier = Modifier.height(20.dp))
+            Text(
+                text = "We couldn't find any matching results. Please check your spelling or try resetting filters.",
+                fontSize = 12.sp,
+                color = Color.DarkGray,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+            Spacer(modifier = Modifier.height(24.dp))
             Button(
                 onClick = onClearFilters,
-                colors = ButtonDefaults.buttonColors(containerColor = CrunchyrollOrange)
+                colors = ButtonDefaults.buttonColors(containerColor = CrunchyrollOrange),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.height(44.dp)
             ) {
-                Text("Reset Search & Filters")
+                Text("Reset Search & Filters", fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -554,7 +653,10 @@ fun SearchErrorState(message: String, onRetry: () -> Unit) {
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(horizontal = 32.dp)
+        ) {
             Icon(
                 imageVector = Icons.Default.Warning,
                 contentDescription = null,
@@ -572,13 +674,72 @@ fun SearchErrorState(message: String, onRetry: () -> Unit) {
                 text = message,
                 fontSize = 13.sp,
                 color = Color.Gray,
-                modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(top = 8.dp, bottom = 24.dp)
             )
             Button(
                 onClick = onRetry,
-                colors = ButtonDefaults.buttonColors(containerColor = CrunchyrollOrange)
+                colors = ButtonDefaults.buttonColors(containerColor = CrunchyrollOrange),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.height(44.dp)
             ) {
-                Text("Retry")
+                Text("Retry", fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+fun SearchShimmerLoader() {
+    val infiniteTransition = rememberInfiniteTransition(label = "shimmer")
+    val alphaAnim by infiniteTransition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 0.7f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1000, easing = EaseInOutSine),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "alpha"
+    )
+
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(2),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = Modifier.fillMaxSize(),
+        userScrollEnabled = false
+    ) {
+        items(6) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(0.7f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(SurfaceDarkVariant.copy(alpha = alphaAnim))
+                    .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.Bottom
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(0.8f)
+                            .height(16.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color.White.copy(alpha = 0.1f * alphaAnim))
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(0.5f)
+                            .height(12.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color.White.copy(alpha = 0.06f * alphaAnim))
+                    )
+                }
             }
         }
     }

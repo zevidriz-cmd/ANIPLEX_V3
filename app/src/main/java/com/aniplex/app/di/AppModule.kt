@@ -97,9 +97,10 @@ object AppModule {
     fun provideAnimeRepository(
         apiService: HiAnimeApiService,
         cacheDao: CacheDao,
-        gson: Gson
+        gson: Gson,
+        okHttpClient: OkHttpClient
     ): AnimeRepository {
-        return AnimeRepositoryImpl(apiService, cacheDao, gson)
+        return AnimeRepositoryImpl(apiService, cacheDao, gson, okHttpClient)
     }
 
     @Provides

@@ -45,21 +45,108 @@ class SearchViewModel @Inject constructor(
     private var isCurrentlyLoadingNextPage = false
     private val allResults = mutableListOf<Anime>()
 
+    private fun levenshteinDistance(s1: String, s2: String): Int {
+        val len1 = s1.length
+        val len2 = s2.length
+        val dp = Array(len1 + 1) { IntArray(len2 + 1) }
+
+        for (i in 0..len1) dp[i][0] = i
+        for (j in 0..len2) dp[0][j] = j
+
+        for (i in 1..len1) {
+            for (j in 1..len2) {
+                val cost = if (s1[i - 1] == s2[j - 1]) 0 else 1
+                dp[i][j] = minOf(
+                    dp[i - 1][j] + 1,
+                    dp[i][j - 1] + 1,
+                    dp[i - 1][j - 1] + cost
+                )
+            }
+        }
+        return dp[len1][len2]
+    }
+
+    private fun calculateMatchScore(query: String, anime: Anime): Int {
+        val title = anime.title.lowercase().trim()
+        val q = query.lowercase().trim()
+        if (q.isEmpty()) return 0
+
+        var score = 0
+
+        // Exact match
+        if (title == q) {
+            score += 1000
+        } else if (title.startsWith(q)) {
+            score += 800
+        } else if (title.contains(q)) {
+            score += 600
+        }
+
+        // Simplified alphanumeric match (handles missing/extra spaces/symbols)
+        val cleanTitle = title.replace(Regex("[^a-z0-9]"), "")
+        val cleanQ = q.replace(Regex("[^a-z0-9]"), "")
+        if (cleanQ.isNotEmpty()) {
+            if (cleanTitle == cleanQ) {
+                score += 900
+            } else if (cleanTitle.contains(cleanQ) || cleanQ.contains(cleanTitle)) {
+                score += 500
+            } else {
+                // Check Levenshtein distance for typo tolerance
+                val distance = levenshteinDistance(cleanTitle, cleanQ)
+                if (distance <= 2) {
+                    score += 300 - (distance * 100)
+                }
+            }
+        }
+
+        // Relevance/Type prioritization: TV series over Movies/OVAs
+        val type = anime.type.lowercase().trim()
+        if (type == "tv" || type == "tv series" || type.contains("tv")) {
+            score += 400
+        } else if (type == "ona" || type.contains("ona")) {
+            score += 300
+        } else if (type == "movie" || type.contains("movie")) {
+            if (!q.contains("movie") && !q.contains("film")) {
+                score -= 100 // Prefer TV over Movies/OVAs when search is general
+            } else {
+                score += 200
+            }
+        }
+
+        return score
+    }
+
     init {
-        // Debounce search suggestions by 400ms
+        // Debounce search query changes:
+        // 1. Fetch suggestions overlay immediately (300ms)
+        // 2. Automatically perform full-grid query (500ms)
         viewModelScope.launch {
             searchQuery
-                .debounce(400)
+                .debounce(500)
                 .distinctUntilChanged()
                 .collect { query ->
-                    if (query.isNotBlank() && query.length >= 2) {
-                        repository.getSuggestions(query).collect { result ->
-                            if (result is Result.Success) {
-                                _suggestions.value = result.data
+                    val q = query.trim()
+                    if (q.isNotBlank()) {
+                        if (q.length >= 2) {
+                            // Fetch suggestions
+                            repository.getSuggestions(q).collect { result ->
+                                if (result is Result.Success) {
+                                    val ranked = result.data.map { anime ->
+                                        val score = calculateMatchScore(q, anime)
+                                        anime to score
+                                    }.sortedWith(
+                                        compareByDescending<Pair<Anime, Int>> { it.second }
+                                            .thenBy { it.first.title }
+                                    ).map { it.first }
+                                    _suggestions.value = ranked
+                                }
                             }
                         }
+                        // Perform search
+                        performSearch(isNewSearch = true)
                     } else {
                         _suggestions.value = emptyList()
+                        _uiState.value = SearchUiState.Idle
                     }
                 }
         }
@@ -115,12 +202,26 @@ class SearchViewModel @Inject constructor(
                     is Result.Success -> {
                         isCurrentlyLoadingNextPage = false
                         val newItems = result.data
-                        allResults.addAll(newItems)
+                        
+                        // Apply smart fuzzy-match sorting/ranking on search results
+                        val rankedItems = if (queryVal.isNotBlank() && !hasFilters) {
+                            newItems.map { anime ->
+                                val score = calculateMatchScore(queryVal, anime)
+                                anime to score
+                            }.sortedWith(
+                                compareByDescending<Pair<Anime, Int>> { it.second }
+                                    .thenBy { it.first.title }
+                            ).map { it.first }
+                        } else {
+                            newItems
+                        }
+
+                        allResults.addAll(rankedItems)
                         
                         if (allResults.isEmpty()) {
                             _uiState.value = SearchUiState.Empty
                         } else {
-                            // Assume next page is available if we got a full batch of items (usually 20+)
+                            // Assume next page is available if we got a full batch of items
                             val hasNext = newItems.size >= 15
                             _uiState.value = SearchUiState.Success(allResults.toList(), hasNext)
                         }

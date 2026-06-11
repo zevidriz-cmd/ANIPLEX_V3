@@ -22,7 +22,8 @@ import javax.inject.Inject
 class AnimeRepositoryImpl @Inject constructor(
     private val apiService: HiAnimeApiService,
     private val cacheDao: CacheDao,
-    private val gson: Gson
+    private val gson: Gson,
+    private val okHttpClient: okhttp3.OkHttpClient
 ) : AnimeRepository {
 
     private val HOME_CACHE_LIFETIME = 10 * 60 * 1000L // 10 minutes
@@ -166,6 +167,44 @@ class AnimeRepositoryImpl @Inject constructor(
 
     override fun search(query: String, page: Int): Flow<Result<List<Anime>>> = flow {
         emit(Result.Loading)
+        
+        // 1. Try fetching via Jikan (MAL) for overwhelmingly superior search accuracy & relevance
+        try {
+            val JIKAN_API_URL = "https://api.jikan.moe/v4/anime"
+            val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
+            val url = "$JIKAN_API_URL?q=$encodedQuery&page=$page"
+            
+            val request = okhttp3.Request.Builder().url(url).build()
+            val resultJson = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                val okResponse = okHttpClient.newCall(request).execute()
+                if (okResponse.isSuccessful) okResponse.body?.string() else null
+            }
+            if (!resultJson.isNullOrEmpty()) {
+                val parsed = gson.fromJson(resultJson, JikanSearchRes::class.java)
+                val mapped = parsed.data?.mapNotNull { item ->
+                    if (item.mal_id == null) return@mapNotNull null
+                    Anime(
+                        id = "mal-${item.mal_id}",
+                        title = item.title ?: "Unknown",
+                        poster = item.images?.webp?.large_image_url ?: item.images?.webp?.image_url ?: "",
+                        type = item.type ?: "TV",
+                        duration = item.duration ?: "",
+                        subEpisodes = item.episodes ?: 0,
+                        dubEpisodes = 0,
+                        rate = item.score?.toString() ?: ""
+                    )
+                } ?: emptyList()
+                
+                if (mapped.isNotEmpty()) {
+                    emit(Result.Success(mapped))
+                    return@flow
+                }
+            }
+        } catch (e: Exception) {
+            // Silently fallback to Aniplex Proxy on Jikan error
+        }
+        
+        // 2. Fallback to Aniplex proxy API
         try {
             val response = apiService.search(query, page)
             if (response.success) {
@@ -180,6 +219,41 @@ class AnimeRepositoryImpl @Inject constructor(
 
     override fun getSuggestions(query: String): Flow<Result<List<Anime>>> = flow {
         emit(Result.Loading)
+        
+        try {
+            val JIKAN_API_URL = "https://api.jikan.moe/v4/anime"
+            val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
+            val url = "$JIKAN_API_URL?q=$encodedQuery&limit=10"
+            
+            val request = okhttp3.Request.Builder().url(url).build()
+            val resultJson = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                val okResponse = okHttpClient.newCall(request).execute()
+                if (okResponse.isSuccessful) okResponse.body?.string() else null
+            }
+            if (!resultJson.isNullOrEmpty()) {
+                val parsed = gson.fromJson(resultJson, JikanSearchRes::class.java)
+                val mapped = parsed.data?.mapNotNull { item ->
+                    if (item.mal_id == null) return@mapNotNull null
+                    Anime(
+                        id = "mal-${item.mal_id}",
+                        title = item.title ?: "Unknown",
+                        poster = item.images?.webp?.large_image_url ?: item.images?.webp?.image_url ?: "",
+                        type = item.type ?: "TV",
+                        duration = item.duration ?: "",
+                        subEpisodes = item.episodes ?: 0,
+                        dubEpisodes = 0,
+                        rate = item.score?.toString() ?: ""
+                    )
+                } ?: emptyList()
+                if (mapped.isNotEmpty()) {
+                    emit(Result.Success(mapped))
+                    return@flow
+                }
+            }
+        } catch (e: Exception) {
+            // Silently ignore
+        }
+        
         try {
             val response = apiService.getSuggestions(query)
             if (response.success) {
@@ -583,12 +657,20 @@ private data class JikanSchedulesResponse(
     val data: List<JikanAnime>?
 )
 
+private data class JikanSearchRes(
+    val data: List<JikanAnime>?
+)
+
 private data class JikanAnime(
     val mal_id: Int?,
     val title: String?,
     val title_english: String?,
     val images: JikanImages?,
-    val broadcast: JikanBroadcast?
+    val broadcast: JikanBroadcast?,
+    val type: String? = null,
+    val duration: String? = null,
+    val episodes: Int? = null,
+    val score: Double? = null
 )
 
 private data class JikanImages(
