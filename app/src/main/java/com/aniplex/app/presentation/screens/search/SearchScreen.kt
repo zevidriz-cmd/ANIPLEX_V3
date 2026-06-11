@@ -1,0 +1,601 @@
+package com.aniplex.app.presentation.screens.search
+
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
+import com.aniplex.app.domain.model.Anime
+import com.aniplex.app.presentation.components.AnimeCard
+import com.aniplex.app.theme.BackgroundVoid
+import com.aniplex.app.theme.CrunchyrollOrange
+import com.aniplex.app.theme.NetflixRed
+import com.aniplex.app.theme.SurfaceDark
+import com.aniplex.app.theme.SurfaceDarkVariant
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SearchScreen(
+    onAnimeClick: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    viewModel: SearchViewModel = hiltViewModel()
+) {
+    val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
+    val suggestions by viewModel.suggestions.collectAsStateWithLifecycle()
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+
+    val selectedType by viewModel.selectedType.collectAsStateWithLifecycle()
+    val selectedStatus by viewModel.selectedStatus.collectAsStateWithLifecycle()
+    val selectedSort by viewModel.selectedSort.collectAsStateWithLifecycle()
+    val selectedLanguage by viewModel.selectedLanguage.collectAsStateWithLifecycle()
+    val selectedGenres by viewModel.selectedGenres.collectAsStateWithLifecycle()
+
+    var showFilterSheet by remember { mutableStateOf(false) }
+    var isSearchFieldFocused by remember { mutableStateOf(false) }
+
+    val gridState = rememberLazyGridState()
+
+    // Detect scrolling boundary for infinite paging
+    val shouldLoadMore = remember {
+        derivedStateOf {
+            val lastVisibleItem = gridState.layoutInfo.visibleItemsInfo.lastOrNull()
+            val totalItems = gridState.layoutInfo.totalItemsCount
+            lastVisibleItem != null && lastVisibleItem.index >= totalItems - 4
+        }
+    }
+    LaunchedEffect(shouldLoadMore.value) {
+        if (shouldLoadMore.value) {
+            viewModel.loadNextPage()
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(BackgroundVoid)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp)
+        ) {
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // 1. Search Bar Outlined Input
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = {
+                    viewModel.onQueryChange(it)
+                    isSearchFieldFocused = true
+                },
+                placeholder = { Text("Search anime...", color = Color.Gray, fontSize = 14.sp) },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Search",
+                        tint = Color.LightGray
+                    )
+                },
+                trailingIcon = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { viewModel.onQueryChange("") }) {
+                                Icon(Icons.Default.Clear, contentDescription = "Clear", tint = Color.LightGray)
+                            }
+                        }
+                        IconButton(onClick = { showFilterSheet = true }) {
+                            val activeFiltersCount = (if (selectedType != null) 1 else 0) +
+                                    (if (selectedStatus != null) 1 else 0) +
+                                    (if (selectedSort != null) 1 else 0) +
+                                    (if (selectedLanguage != null) 1 else 0) +
+                                    selectedGenres.size
+                            BadgedBox(
+                                badge = {
+                                    if (activeFiltersCount > 0) {
+                                        Badge(containerColor = CrunchyrollOrange, contentColor = Color.White) {
+                                            Text(activeFiltersCount.toString())
+                                        }
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.FilterList,
+                                    contentDescription = "Filters",
+                                    tint = if (activeFiltersCount > 0) CrunchyrollOrange else Color.LightGray
+                                )
+                            }
+                        }
+                    }
+                },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = CrunchyrollOrange,
+                    unfocusedBorderColor = SurfaceDarkVariant,
+                    focusedContainerColor = SurfaceDark,
+                    unfocusedContainerColor = SurfaceDark,
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White
+                ),
+                shape = RoundedCornerShape(12.dp),
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // 2. Main Search Content Areas
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+            ) {
+                when (val state = uiState) {
+                    is SearchUiState.Idle -> {
+                        SearchIdleState()
+                    }
+                    is SearchUiState.Loading -> {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(color = CrunchyrollOrange)
+                        }
+                    }
+                    is SearchUiState.Success -> {
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(2),
+                            state = gridState,
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            items(state.results) { anime ->
+                                AnimeCard(anime = anime, onClick = onAnimeClick)
+                            }
+                            if (state.hasNextPage) {
+                                item {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(16.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        CircularProgressIndicator(color = CrunchyrollOrange, modifier = Modifier.size(24.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    is SearchUiState.Empty -> {
+                        SearchEmptyState(
+                            onClearFilters = {
+                                viewModel.clearFilters()
+                                viewModel.onQueryChange("")
+                                viewModel.performSearch()
+                            }
+                        )
+                    }
+                    is SearchUiState.Error -> {
+                        SearchErrorState(
+                            message = state.message,
+                            onRetry = { viewModel.performSearch() }
+                        )
+                    }
+                }
+
+                // 3. Debounced Suggestions Dropdown Overlay
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = isSearchFieldFocused && suggestions.isNotEmpty() && searchQuery.length >= 2,
+                    enter = fadeIn(),
+                    exit = fadeOut()
+                ) {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+                        border = BorderStroke(1.dp, SurfaceDarkVariant),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 280.dp)
+                    ) {
+                        LazyColumn(
+                            contentPadding = PaddingValues(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            items(suggestions) { item ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            isSearchFieldFocused = false
+                                            onAnimeClick(item.id)
+                                        }
+                                        .padding(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    AsyncImage(
+                                        model = item.poster,
+                                        contentDescription = null,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .clip(RoundedCornerShape(4.dp))
+                                    )
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = item.title,
+                                            color = Color.White,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "${item.type} • ${item.duration}",
+                                            color = Color.Gray,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. Advanced Filters Modal Bottom Sheet
+        if (showFilterSheet) {
+            ModalBottomSheet(
+                onDismissRequest = { showFilterSheet = false },
+                containerColor = SurfaceDark,
+                contentColor = Color.White,
+                dragHandle = { BottomSheetDefaults.DragHandle(color = Color.DarkGray) }
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Filter Settings",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        TextButton(
+                            onClick = { viewModel.clearFilters() },
+                            colors = ButtonDefaults.textButtonColors(contentColor = CrunchyrollOrange)
+                        ) {
+                            Text("Reset All", fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f, fill = false),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        // Type Filter
+                        item {
+                            FilterSectionTitle("Type")
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                val types = listOf("tv", "movie", "ova", "ona", "special")
+                                types.forEach { type ->
+                                    FilterChip(
+                                        selected = selectedType == type,
+                                        onClick = { viewModel.selectedType.value = if (selectedType == type) null else type },
+                                        label = { Text(type.uppercase()) },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = CrunchyrollOrange,
+                                            selectedLabelColor = Color.White,
+                                            containerColor = SurfaceDarkVariant,
+                                            labelColor = Color.LightGray
+                                        )
+                                    )
+                                }
+                            }
+                        }
+
+                        // Status Filter
+                        item {
+                            FilterSectionTitle("Status")
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                val statuses = mapOf(
+                                    "currently-airing" to "Airing",
+                                    "finished-airing" to "Finished",
+                                    "not-yet-aired" to "Upcoming"
+                                )
+                                statuses.forEach { (key, display) ->
+                                    FilterChip(
+                                        selected = selectedStatus == key,
+                                        onClick = { viewModel.selectedStatus.value = if (selectedStatus == key) null else key },
+                                        label = { Text(display) },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = CrunchyrollOrange,
+                                            selectedLabelColor = Color.White,
+                                            containerColor = SurfaceDarkVariant,
+                                            labelColor = Color.LightGray
+                                        )
+                                    )
+                                }
+                            }
+                        }
+
+                        // Language / Audio Filter
+                        item {
+                            FilterSectionTitle("Language")
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                val langs = mapOf("sub" to "Sub", "dub" to "Dub", "sub-dub" to "Both")
+                                langs.forEach { (key, display) ->
+                                    FilterChip(
+                                        selected = selectedLanguage == key,
+                                        onClick = { viewModel.selectedLanguage.value = if (selectedLanguage == key) null else key },
+                                        label = { Text(display) },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = CrunchyrollOrange,
+                                            selectedLabelColor = Color.White,
+                                            containerColor = SurfaceDarkVariant,
+                                            labelColor = Color.LightGray
+                                        )
+                                    )
+                                }
+                            }
+                        }
+
+                        // Sort Order
+                        item {
+                            FilterSectionTitle("Sort Order")
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                val sorts = mapOf(
+                                    "default" to "Default",
+                                    "recently-added" to "Newest",
+                                    "most-popular" to "Popular",
+                                    "alphabetical" to "A-Z"
+                                )
+                                sorts.forEach { (key, display) ->
+                                    FilterChip(
+                                        selected = selectedSort == key,
+                                        onClick = { viewModel.selectedSort.value = if (selectedSort == key) null else key },
+                                        label = { Text(display) },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = CrunchyrollOrange,
+                                            selectedLabelColor = Color.White,
+                                            containerColor = SurfaceDarkVariant,
+                                            labelColor = Color.LightGray
+                                        )
+                                    )
+                                }
+                            }
+                        }
+
+                        // Genres (multi-select flow row chips)
+                        item {
+                            FilterSectionTitle("Genres")
+                            val genres = listOf(
+                                "action", "adventure", "comedy", "drama", "fantasy",
+                                "romance", "sci-fi", "slice-of-life", "supernatural", "thriller"
+                            )
+                            OptFlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                genres.forEach { genre ->
+                                    val isSelected = selectedGenres.contains(genre)
+                                    FilterChip(
+                                        selected = isSelected,
+                                        onClick = { viewModel.toggleGenre(genre) },
+                                        label = { Text(genre.replace("-", " ").replaceFirstChar { it.uppercase() }) },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = CrunchyrollOrange,
+                                            selectedLabelColor = Color.White,
+                                            containerColor = SurfaceDarkVariant,
+                                            labelColor = Color.LightGray
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    // Apply Button
+                    Button(
+                        onClick = {
+                            showFilterSheet = false
+                            viewModel.performSearch()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = CrunchyrollOrange),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                    ) {
+                        Text("APPLY FILTERS", fontWeight = FontWeight.Bold, color = Color.White)
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun FilterSectionTitle(title: String) {
+    Text(
+        text = title,
+        color = Color.LightGray,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.padding(bottom = 6.dp)
+    )
+}
+
+@Composable
+fun SearchIdleState() {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                imageVector = Icons.Default.Search,
+                contentDescription = null,
+                tint = Color.DarkGray,
+                modifier = Modifier.size(80.dp)
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "Discover Anime",
+                fontSize = 18.sp,
+                color = Color.White,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = "Type keywords or apply filters to get started",
+                fontSize = 13.sp,
+                color = Color.Gray,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        }
+    }
+}
+
+@Composable
+fun SearchEmptyState(onClearFilters: () -> Unit) {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(horizontal = 32.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.SearchOff,
+                contentDescription = null,
+                tint = NetflixRed.copy(alpha = 0.8f),
+                modifier = Modifier.size(80.dp)
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "No Results Found",
+                fontSize = 18.sp,
+                color = Color.White,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = "We couldn't find any matching anime. Try clearing filters or searching for different keywords.",
+                fontSize = 13.sp,
+                color = Color.Gray,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(top = 6.dp)
+            )
+            Spacer(modifier = Modifier.height(20.dp))
+            Button(
+                onClick = onClearFilters,
+                colors = ButtonDefaults.buttonColors(containerColor = CrunchyrollOrange)
+            ) {
+                Text("Reset Search & Filters")
+            }
+        }
+    }
+}
+
+@Composable
+fun SearchErrorState(message: String, onRetry: () -> Unit) {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                imageVector = Icons.Default.Warning,
+                contentDescription = null,
+                tint = NetflixRed,
+                modifier = Modifier.size(72.dp)
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "Search Request Failed",
+                fontSize = 18.sp,
+                color = Color.White,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = message,
+                fontSize = 13.sp,
+                color = Color.Gray,
+                modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
+            )
+            Button(
+                onClick = onRetry,
+                colors = ButtonDefaults.buttonColors(containerColor = CrunchyrollOrange)
+            ) {
+                Text("Retry")
+            }
+        }
+    }
+}
+
+// Simple FlowRow helper for items wrap-around
+@Composable
+fun OptFlowRow(
+    modifier: Modifier = Modifier,
+    horizontalArrangement: Arrangement.Horizontal = Arrangement.Start,
+    verticalArrangement: Arrangement.Vertical = Arrangement.Top,
+    content: @Composable () -> Unit
+) {
+    androidx.compose.foundation.layout.FlowRow(
+        modifier = modifier,
+        horizontalArrangement = horizontalArrangement,
+        verticalArrangement = verticalArrangement,
+        content = { content() }
+    )
+}

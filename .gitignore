@@ -1,0 +1,31 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# Debug logs and dumps
+*.log
+/logcat.txt
+/logcat_dump.txt
+/player_debug_log.txt
+/window_dump*.xml
+
+# Screenshots
+/screenshot*.png
+
+# Python cache
+__pycache__/
+
+# Kotlin cache
+.kotlin/

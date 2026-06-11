@@ -1,0 +1,249 @@
+package com.aniplex.app.presentation.screens.player
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.aniplex.app.data.local.preferences.PreferenceManager
+import com.aniplex.app.data.local.preferences.ProfileManager
+import com.aniplex.app.domain.model.AnimeDetail
+import com.aniplex.app.domain.model.Episode
+import com.aniplex.app.domain.model.EpisodeStream
+import com.aniplex.app.domain.model.Result
+import com.aniplex.app.domain.repository.AnimeRepository
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
+import javax.inject.Inject
+
+sealed interface PlayerUiState {
+    data object Loading : PlayerUiState
+    data class Success(val stream: EpisodeStream) : PlayerUiState
+    data class Error(val message: String) : PlayerUiState
+    data class WebViewFallback(val embedUrl: String) : PlayerUiState
+}
+
+@HiltViewModel
+class PlayerViewModel @Inject constructor(
+    private val repository: AnimeRepository,
+    private val firestore: FirebaseFirestore,
+    private val auth: FirebaseAuth,
+    private val preferenceManager: PreferenceManager,
+    private val profileManager: ProfileManager
+) : ViewModel() {
+
+    var autoplayNextEpisode: Boolean
+        get() = preferenceManager.autoplayNextEpisode
+        set(value) {
+            preferenceManager.autoplayNextEpisode = value
+        }
+
+    val skipIntro: Boolean
+        get() = preferenceManager.skipIntro
+
+    val skipOutro: Boolean
+        get() = preferenceManager.skipOutro
+
+    var playbackSpeed: Float
+        get() = preferenceManager.playbackSpeed
+        set(value) {
+            preferenceManager.playbackSpeed = value
+        }
+
+    var subtitlesEnabled: Boolean
+        get() = preferenceManager.subtitlesEnabled
+        set(value) {
+            preferenceManager.subtitlesEnabled = value
+        }
+
+    var defaultAudioCategory: String
+        get() = preferenceManager.defaultAudioCategory
+        set(value) {
+            preferenceManager.defaultAudioCategory = value
+        }
+
+    var preferredQuality: String
+        get() = preferenceManager.preferredQuality
+        set(value) {
+            preferenceManager.preferredQuality = value
+        }
+
+
+    private val _uiState = MutableStateFlow<PlayerUiState>(PlayerUiState.Loading)
+    val uiState: StateFlow<PlayerUiState> = _uiState.asStateFlow()
+
+    private val _episodes = MutableStateFlow<List<Episode>>(emptyList())
+    val episodes: StateFlow<List<Episode>> = _episodes.asStateFlow()
+
+    private val _initialProgress = MutableStateFlow(0L)
+    val initialProgress: StateFlow<Long> = _initialProgress.asStateFlow()
+
+    private val _animeDetail = MutableStateFlow<AnimeDetail?>(null)
+    val animeDetail: StateFlow<AnimeDetail?> = _animeDetail.asStateFlow()
+
+    private val _currentEpisode = MutableStateFlow<Episode?>(null)
+    val currentEpisode: StateFlow<Episode?> = _currentEpisode.asStateFlow()
+
+    private val _likeCount = MutableStateFlow(16800)
+    val likeCount: StateFlow<Int> = _likeCount.asStateFlow()
+    
+    private val _isLiked = MutableStateFlow(false)
+    val isLiked: StateFlow<Boolean> = _isLiked.asStateFlow()
+
+    private val _dislikeCount = MutableStateFlow(36)
+    val dislikeCount: StateFlow<Int> = _dislikeCount.asStateFlow()
+    
+    private val _isDisliked = MutableStateFlow(false)
+    val isDisliked: StateFlow<Boolean> = _isDisliked.asStateFlow()
+
+    private var progressSaveJob: Job? = null
+    private var posterUrl: String = ""
+
+    fun initialize(animeId: String, episodeId: String, category: String) {
+        _uiState.value = PlayerUiState.Loading
+        
+        viewModelScope.launch {
+            // 1. Fetch Anime Detail (for poster image)
+            repository.getAnimeDetail(animeId, false).collect { result ->
+                if (result is Result.Success) {
+                    posterUrl = result.data.poster
+                    _animeDetail.value = result.data
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            // 2. Fetch Episodes List (to support next/prev navigation)
+            repository.getEpisodes(animeId, false).collect { result ->
+                if (result is Result.Success) {
+                    _episodes.value = result.data
+                    _currentEpisode.value = result.data.find { it.id == episodeId }
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            // 3. Fetch Watch History (to resume playback)
+            val userId = auth.currentUser?.uid
+            val profileId = profileManager.activeProfile.value?.id
+            if (userId != null) {
+                try {
+                    val docRef = if (profileId != null) {
+                        firestore.collection("users").document(userId)
+                            .collection("profiles").document(profileId)
+                            .collection("history").document(animeId)
+                    } else {
+                        firestore.collection("users").document(userId)
+                            .collection("history").document(animeId)
+                    }
+                    val doc = docRef.get().await()
+                    if (doc.exists()) {
+                        val savedEpisodeId = doc.getString("episodeId")
+                        if (savedEpisodeId == episodeId) {
+                            _initialProgress.value = doc.getLong("progressPosition") ?: 0L
+                        }
+                    }
+                } catch (e: Exception) {
+                    // Ignore, default to 0
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            repository.getEpisodeStream(episodeId, "hd-1", category).collect { result ->
+                when (result) {
+                    is Result.Success -> {
+                        if (result.data.isHls) {
+                            _uiState.value = PlayerUiState.Success(stream = result.data)
+                        } else {
+                            _uiState.value = PlayerUiState.WebViewFallback(embedUrl = result.data.videoUrl)
+                        }
+                    }
+                    is Result.Error -> {
+                        _uiState.value = PlayerUiState.Error(result.message)
+                    }
+                    is Result.Loading -> {
+                        _uiState.value = PlayerUiState.Loading
+                    }
+                }
+            }
+        }
+    }
+
+    fun stopPeriodicProgressSaving() {
+        // Obsolete
+    }
+
+    fun saveProgress(
+        animeId: String,
+        animeTitle: String,
+        episodeId: String,
+        episodeNumber: Int,
+        episodeTitle: String,
+        progress: Long,
+        duration: Long
+    ) {
+        val userId = auth.currentUser?.uid ?: return
+        val profileId = profileManager.activeProfile.value?.id
+        if (progress <= 0 || duration <= 0) return
+
+        viewModelScope.launch {
+            try {
+                val data = hashMapOf(
+                    "animeId" to animeId,
+                    "animeTitle" to animeTitle,
+                    "poster" to posterUrl,
+                    "episodeId" to episodeId,
+                    "episodeNumber" to episodeNumber,
+                    "episodeTitle" to episodeTitle,
+                    "progressPosition" to progress,
+                    "totalDuration" to duration,
+                    "updatedAt" to System.currentTimeMillis()
+                )
+                val docRef = if (profileId != null) {
+                    firestore.collection("users").document(userId)
+                        .collection("profiles").document(profileId)
+                        .collection("history").document(animeId)
+                } else {
+                    firestore.collection("users").document(userId)
+                        .collection("history").document(animeId)
+                }
+                docRef.set(data).await()
+            } catch (e: Exception) {
+                // Ignore silent error
+            }
+        }
+    }
+
+    fun toggleLike() {
+        if (_isLiked.value) {
+            _isLiked.value = false
+            _likeCount.value -= 1
+        } else {
+            _isLiked.value = true
+            _likeCount.value += 1
+            if (_isDisliked.value) toggleDislike()
+        }
+    }
+
+    fun toggleDislike() {
+        if (_isDisliked.value) {
+            _isDisliked.value = false
+            _dislikeCount.value -= 1
+        } else {
+            _isDisliked.value = true
+            _dislikeCount.value += 1
+            if (_isLiked.value) toggleLike()
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        stopPeriodicProgressSaving()
+    }
+}
