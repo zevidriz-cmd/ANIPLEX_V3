@@ -8,6 +8,7 @@ import com.aniplex.app.data.local.database.AppDatabase
 import com.aniplex.app.data.remote.api.HiAnimeApiService
 import com.aniplex.app.data.repository.AnimeRepositoryImpl
 import com.aniplex.app.data.repository.AuthRepositoryImpl
+import com.aniplex.app.data.local.preferences.PreferenceManager
 import com.aniplex.app.domain.repository.AnimeRepository
 import com.aniplex.app.domain.repository.AuthRepository
 import com.google.firebase.auth.FirebaseAuth
@@ -98,9 +99,10 @@ object AppModule {
         apiService: HiAnimeApiService,
         cacheDao: CacheDao,
         gson: Gson,
-        okHttpClient: OkHttpClient
+        okHttpClient: OkHttpClient,
+        preferenceManager: PreferenceManager
     ): AnimeRepository {
-        return AnimeRepositoryImpl(apiService, cacheDao, gson, okHttpClient)
+        return AnimeRepositoryImpl(apiService, cacheDao, gson, okHttpClient, preferenceManager)
     }
 
     @Provides

@@ -98,6 +98,8 @@ fun DetailScreen(
     val seasonsState by viewModel.seasonsState.collectAsStateWithLifecycle()
     val resolvedAnikotoId by viewModel.resolvedAnikotoId.collectAsStateWithLifecycle()
     val isResolvingSeason by viewModel.isResolvingSeason.collectAsStateWithLifecycle()
+    val selectedVersion by viewModel.selectedVersion.collectAsStateWithLifecycle()
+    val hasMultipleVersions by viewModel.hasMultipleVersions.collectAsStateWithLifecycle()
 
     // Load the selected season smoothly by popping the current screen and pushing a new one
     LaunchedEffect(resolvedAnikotoId) {
@@ -166,6 +168,9 @@ fun DetailScreen(
                     onSeasonRetry = { viewModel.retryLoadSeasons() },
                     onMarkAsWatched = { viewModel.markAsWatched(state.data.id, state.data.name, state.data.poster) },
                     onRemoveFromHistory = { viewModel.removeFromHistory(state.data.id) },
+                    selectedVersion = selectedVersion,
+                    onVersionChange = { viewModel.setSelectedVersion(it) },
+                    hasMultipleVersions = hasMultipleVersions,
                     modifier = Modifier.fillMaxSize()
                 )
             }
@@ -271,6 +276,9 @@ fun DetailContent(
     onSeasonRetry: () -> Unit,
     onMarkAsWatched: () -> Unit,
     onRemoveFromHistory: () -> Unit,
+    selectedVersion: String,
+    onVersionChange: (String) -> Unit,
+    hasMultipleVersions: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     var selectedTab by remember { mutableStateOf(0) }
@@ -589,7 +597,20 @@ fun DetailContent(
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = if (hasHistory) "RESUME E${watchHistory?.episodeNumber}" else "START WATCHING E1",
+                                    text = buildString {
+                                        if (hasHistory) {
+                                            append("RESUME E${watchHistory?.episodeNumber}")
+                                        } else {
+                                            append("START WATCHING E1")
+                                        }
+                                        if (hasMultipleVersions) {
+                                            if (selectedVersion == "uncensored") {
+                                                append(" (UNCUT)")
+                                            } else {
+                                                append(" (TV)")
+                                            }
+                                        }
+                                    },
                                     fontWeight = FontWeight.Bold,
                                     color = Color.Black,
                                     fontSize = 14.sp
@@ -1357,7 +1378,10 @@ fun DetailContent(
                     },
                     downloads = downloads,
                     triggerDownload = triggerDownload,
-                    watchHistory = watchHistory
+                    watchHistory = watchHistory,
+                    selectedVersion = selectedVersion,
+                    onVersionChange = onVersionChange,
+                    hasMultipleVersions = hasMultipleVersions
                 )
                 1 -> CharactersTabContent(charactersState = charactersState)
                 2 -> RecommendationsTabContent(
@@ -1511,7 +1535,10 @@ fun EpisodesTabContent(
     onPlayClick: (String, String, Int, String) -> Unit,
     downloads: List<com.aniplex.app.data.download.DownloadTask>,
     triggerDownload: (Episode) -> Unit,
-    watchHistory: HistoryItem? = null
+    watchHistory: HistoryItem? = null,
+    selectedVersion: String,
+    onVersionChange: (String) -> Unit,
+    hasMultipleVersions: Boolean = false
 ) {
     var showSeasonDialog by remember { mutableStateOf(false) }
     var selectedChunkIndex by remember { mutableStateOf(0) }
@@ -1521,7 +1548,7 @@ fun EpisodesTabContent(
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
     ) {
-        // Season Selector and Audio Toggle
+        // Season Selector and Audio/Version Toggles
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1570,26 +1597,59 @@ fun EpisodesTabContent(
             }
 
             Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(SurfaceDark)
-                    .border(1.dp, SurfaceDarkVariant, RoundedCornerShape(8.dp))
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
+                // Audio Language Toggle Selector
+                Row(
                     modifier = Modifier
-                        .clickable { onAudioTypeChange("SUB") }
-                        .background(if (selectedAudioType == "SUB") CrunchyrollOrange else Color.Transparent)
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(SurfaceDark)
+                        .border(1.dp, SurfaceDarkVariant, RoundedCornerShape(8.dp))
                 ) {
-                    Text("SUB", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Box(
+                        modifier = Modifier
+                            .clickable { onAudioTypeChange("SUB") }
+                            .background(if (selectedAudioType == "SUB") CrunchyrollOrange else Color.Transparent)
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Text("SUB", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Box(
+                        modifier = Modifier
+                            .clickable { onAudioTypeChange("DUB") }
+                            .background(if (selectedAudioType == "DUB") NetflixRed else Color.Transparent)
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Text("DUB", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
-                Box(
-                    modifier = Modifier
-                        .clickable { onAudioTypeChange("DUB") }
-                        .background(if (selectedAudioType == "DUB") NetflixRed else Color.Transparent)
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
-                ) {
-                    Text("DUB", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+
+                // Anime Version Toggle Selector [TV vs UNCUT]
+                if (hasMultipleVersions) {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(SurfaceDark)
+                            .border(1.dp, SurfaceDarkVariant, RoundedCornerShape(8.dp))
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .clickable { onVersionChange("censored") }
+                                .background(if (selectedVersion == "censored") CrunchyrollOrange else Color.Transparent)
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Text("TV", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Box(
+                            modifier = Modifier
+                                .clickable { onVersionChange("uncensored") }
+                                .background(if (selectedVersion == "uncensored") CrunchyrollOrange else Color.Transparent)
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Text("UNCUT", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
             }
         }
@@ -1681,6 +1741,46 @@ fun EpisodesTabContent(
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis
                                     )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        // Uncut vs TV badge
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .background(
+                                                    if (selectedVersion == "uncensored") 
+                                                        CrunchyrollOrange.copy(alpha = 0.15f) 
+                                                    else 
+                                                        Color.Gray.copy(alpha = 0.2f)
+                                                )
+                                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        ) {
+                                            Text(
+                                                text = if (selectedVersion == "uncensored") "UNCUT" else "TV-BROADCAST",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (selectedVersion == "uncensored") CrunchyrollOrange else Color.LightGray
+                                            )
+                                        }
+                                        if (isFiller) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .background(Color.Red.copy(alpha = 0.15f))
+                                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                            ) {
+                                                Text(
+                                                    text = "FILLER",
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = Color.Red
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
                                 
                                 Spacer(modifier = Modifier.width(12.dp))

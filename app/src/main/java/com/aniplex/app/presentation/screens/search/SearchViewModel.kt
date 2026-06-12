@@ -86,33 +86,44 @@ class SearchViewModel @Inject constructor(
 
         var score = 0
 
-        // Exact match
-        if (title == q) {
-            score += 1000
-        } else if (title.startsWith(q)) {
-            score += 800
-        } else if (title.contains(q)) {
-            score += 600
-        }
-
-        // Simplified alphanumeric match (handles missing/extra spaces/symbols)
         val cleanTitle = title.replace(Regex("[^a-z0-9]"), "")
         val cleanQ = q.replace(Regex("[^a-z0-9]"), "")
-        if (cleanQ.isNotEmpty()) {
-            if (cleanTitle == cleanQ) {
-                score += 900
-            } else if (cleanTitle.contains(cleanQ) || cleanQ.contains(cleanTitle)) {
-                score += 500
-            } else {
-                // Check Levenshtein distance for typo tolerance
-                val distance = levenshteinDistance(cleanTitle, cleanQ)
-                if (distance <= 2) {
-                    score += 300 - (distance * 100)
-                }
+
+        // 1. Exact Match prioritization
+        if (title == q) {
+            score += 100000
+        } else if (cleanQ.isNotEmpty() && cleanTitle == cleanQ) {
+            score += 80000
+        }
+
+        // 2. Starts-with prioritization
+        if (title.startsWith(q)) {
+            score += 50000
+        } else if (cleanQ.isNotEmpty() && cleanTitle.startsWith(cleanQ)) {
+            score += 40000
+        }
+
+        // 3. Word boundary contains prioritization (e.g., query starts a word in title)
+        if (title.contains(" $q") || title.contains("$q ")) {
+            score += 20000
+        }
+
+        // 4. Substring contains prioritization
+        if (title.contains(q)) {
+            score += 10000
+        } else if (cleanQ.isNotEmpty() && cleanTitle.contains(cleanQ)) {
+            score += 5000
+        }
+
+        // 5. Typo tolerance / Similarity
+        if (cleanQ.isNotEmpty() && cleanTitle.isNotEmpty()) {
+            val distance = levenshteinDistance(cleanTitle, cleanQ)
+            if (distance <= 2) {
+                score += (2000 - (distance * 500))
             }
         }
 
-        // Relevance/Type prioritization: TV series over Movies/OVAs
+        // 6. Tie-breaker type prioritization (very minor so text match always wins)
         val type = anime.type.lowercase().trim()
         if (type == "tv" || type == "tv series" || type.contains("tv")) {
             score += 400
@@ -120,7 +131,7 @@ class SearchViewModel @Inject constructor(
             score += 300
         } else if (type == "movie" || type.contains("movie")) {
             if (!q.contains("movie") && !q.contains("film")) {
-                score -= 100 // Prefer TV over Movies/OVAs when search is general
+                score -= 100
             } else {
                 score += 200
             }
@@ -211,10 +222,6 @@ class SearchViewModel @Inject constructor(
 
         val hasFilters = typeVal != null || statusVal != null || sortVal != null || langVal != null || genresVal.isNotEmpty()
 
-        if (isNewSearch && queryVal.isNotEmpty()) {
-            recordSearchQuery(queryVal)
-        }
-
         viewModelScope.launch {
             val flowResult = if (queryVal.isNotEmpty()) {
                 // If there is an active search query, always use the search endpoint to preserve the query scope!
@@ -265,7 +272,7 @@ class SearchViewModel @Inject constructor(
                         }
 
                         // Apply smart fuzzy-match sorting/ranking on search results
-                        val rankedItems = if (queryVal.isNotBlank() && !hasFilters) {
+                        val rankedItems = if (queryVal.isNotBlank()) {
                             filteredItems.map { anime ->
                                 val score = calculateMatchScore(queryVal, anime)
                                 anime to score

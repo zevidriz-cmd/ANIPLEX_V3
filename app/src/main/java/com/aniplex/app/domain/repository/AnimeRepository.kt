@@ -8,6 +8,7 @@ interface AnimeRepository {
     fun getAnimeDetail(id: String, forceRefresh: Boolean): Flow<Result<AnimeDetail>>
     fun getEpisodes(id: String, forceRefresh: Boolean): Flow<Result<List<Episode>>>
     fun search(query: String, page: Int): Flow<Result<List<Anime>>>
+    fun searchHiAnime(query: String): Flow<Result<List<Anime>>>
     fun getSuggestions(query: String): Flow<Result<List<Anime>>>
     fun getAnimeByCategory(category: String, page: Int): Flow<Result<List<Anime>>>
     fun getAnimeByGenre(genre: String, page: Int): Flow<Result<List<Anime>>>

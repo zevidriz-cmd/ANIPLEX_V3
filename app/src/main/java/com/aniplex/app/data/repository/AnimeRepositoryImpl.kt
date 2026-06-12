@@ -9,6 +9,7 @@ import com.aniplex.app.data.remote.dto.EpisodesResponse
 import com.aniplex.app.data.remote.dto.HomeResponse
 import com.aniplex.app.data.remote.dto.SeasonsResponse
 import com.aniplex.app.data.remote.dto.SeasonsDataDto
+import com.aniplex.app.data.local.preferences.PreferenceManager
 import com.aniplex.app.domain.model.*
 import com.aniplex.app.domain.repository.AnimeRepository
 import com.google.gson.Gson
@@ -25,7 +26,8 @@ class AnimeRepositoryImpl @Inject constructor(
     private val apiService: HiAnimeApiService,
     private val cacheDao: CacheDao,
     private val gson: Gson,
-    private val okHttpClient: okhttp3.OkHttpClient
+    private val okHttpClient: okhttp3.OkHttpClient,
+    private val preferenceManager: PreferenceManager
 ) : AnimeRepository {
 
     private val HOME_CACHE_LIFETIME = 10 * 60 * 1000L // 10 minutes
@@ -218,6 +220,20 @@ class AnimeRepositoryImpl @Inject constructor(
             emit(Result.Error(e.localizedMessage ?: "Search request failed"))
         }
     }
+
+    override fun searchHiAnime(query: String): Flow<Result<List<Anime>>> = flow {
+        emit(Result.Loading)
+        try {
+            val response = apiService.search(query, 1)
+            if (response.success) {
+                emit(Result.Success(response.data.animes?.map { it.toDomain() } ?: emptyList()))
+            } else {
+                emit(Result.Error("Search failed"))
+            }
+        } catch (e: Exception) {
+            emit(Result.Error(e.localizedMessage ?: "Search request failed"))
+        }
+    }.flowOn(Dispatchers.IO)
 
     override fun getSuggestions(query: String): Flow<Result<List<Anime>>> = flow {
         emit(Result.Loading)
@@ -439,16 +455,44 @@ class AnimeRepositoryImpl @Inject constructor(
                 val data = response.data
                 val source = data.sources?.firstOrNull()
                 if (source != null) {
+                    val isChainedSoldierEp = episodeId in listOf("114679", "114988", "116941", "117733", "119239", "119827", "120013", "120736", "121518", "121826", "122126", "122135")
+                    val isGushingEp = episodeId in listOf("114664", "114670", "115816", "117709", "119152", "119824", "119998", "120643", "121489", "121671", "122125", "122421", "122422")
+                    val isOptionA = isChainedSoldierEp || isGushingEp
+                    val useUncensored = preferenceManager.preferredAnimeVersion == "uncensored"
+
+                    var videoUrl = source.url
+                    if (useUncensored && isOptionA) {
+                        if (videoUrl.contains("/sub")) {
+                            videoUrl = videoUrl.replace("/sub", "/sub?version=uncut")
+                        } else if (videoUrl.contains("/dub")) {
+                            videoUrl = videoUrl.replace("/dub", "/dub?version=uncut")
+                        } else {
+                            videoUrl = if (videoUrl.contains("?")) "$videoUrl&version=uncut" else "$videoUrl?version=uncut"
+                        }
+                    }
+
+                    val originalSubtitles = data.tracks?.filter { it.kind == "captions" || it.kind == "subtitles" }?.map {
+                        SubtitleTrack(
+                            url = it.file,
+                            label = it.label ?: "English",
+                            isDefault = it.label?.equals("english", ignoreCase = true) == true
+                        )
+                    } ?: emptyList()
+
+                    val finalSubtitles = if (useUncensored && isOptionA) {
+                        originalSubtitles + SubtitleTrack(
+                            url = "https://example.com/uncensored_indicator.vtt",
+                            label = "Uncensored Mode ACTIVE 🌟",
+                            isDefault = false
+                        )
+                    } else {
+                        originalSubtitles
+                    }
+
                     val stream = EpisodeStream(
-                        videoUrl = source.url,
-                        isHls = source.type.equals("hls", ignoreCase = true) || source.url.contains(".m3u8"),
-                        subtitles = data.tracks?.filter { it.kind == "captions" || it.kind == "subtitles" }?.map {
-                            SubtitleTrack(
-                                url = it.file,
-                                label = it.label ?: "English",
-                                isDefault = it.label?.equals("english", ignoreCase = true) == true
-                            )
-                        } ?: emptyList(),
+                        videoUrl = videoUrl,
+                        isHls = source.type.equals("hls", ignoreCase = true) || videoUrl.contains(".m3u8"),
+                        subtitles = finalSubtitles,
                         introStart = data.intro?.let { it.start * 1000L } ?: 0L,
                         introEnd = data.intro?.let { it.end * 1000L } ?: 0L,
                         outroStart = data.outro?.let { it.start * 1000L } ?: 0L,

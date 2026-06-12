@@ -17,6 +17,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import javax.inject.Inject
@@ -72,6 +73,105 @@ class PlayerViewModel @Inject constructor(
         set(value) {
             preferenceManager.preferredQuality = value
         }
+
+    var preferredAnimeVersion: String
+        get() = preferenceManager.preferredAnimeVersion
+        set(value) {
+            preferenceManager.preferredAnimeVersion = value
+        }
+
+    fun setPreferredAnimeVersion(version: String, onStatusMsg: (String) -> Unit) {
+        preferenceManager.preferredAnimeVersion = version
+        val currentDetail = animeDetail.value
+        val currentEp = currentEpisode.value ?: return
+        if (currentDetail == null) return
+
+        val currentId = currentDetail.id
+        val currentTitle = currentDetail.name
+        val malId = currentDetail.malId
+
+        // Option A Manual Redirection Bypass for "Chained Soldier" and "Gushing over Magical Girls"
+        if (currentId == "6245" || malId == "50392" || currentId == "5926" || malId == "54722") {
+            val targetIsUncut = version == "uncensored"
+            onStatusMsg("Switched/Reloading ${if (targetIsUncut) "Uncut (Uncensored)" else "TV (Censored)"} version!")
+            initialize(currentId, currentEp.id, defaultAudioCategory.lowercase())
+            return
+        }
+
+        // Determine if current anime is uncut
+        val isCurrentUncut = currentTitle.contains("uncut", ignoreCase = true) ||
+                currentTitle.contains("uncensored", ignoreCase = true) ||
+                currentId.contains("-uncut", ignoreCase = true)
+
+        val targetIsUncut = version == "uncensored"
+
+        if (isCurrentUncut == targetIsUncut) {
+            onStatusMsg("Already playing ${if (targetIsUncut) "Uncut" else "TV"} version.")
+            return
+        }
+
+        onStatusMsg("Searching for ${if (targetIsUncut) "Uncut" else "TV"} version...")
+
+        viewModelScope.launch {
+            val baseTitle = currentTitle
+                .replace(Regex("(?i)\\s*\\(uncut\\)"), "")
+                .replace(Regex("(?i)\\s*\\(uncensored\\)"), "")
+                .replace(Regex("(?i)\\s*\\(censored\\)"), "")
+                .replace(Regex("(?i)\\s*\\(tv-broadcast\\)"), "")
+                .replace(Regex("(?i)\\s*\\(tv\\)"), "")
+                .trim()
+
+            var matchedAnikotoId: String? = null
+
+            // search direct HiAnime scraper
+            val searchQuery = if (targetIsUncut) "$baseTitle uncut" else baseTitle
+            repository.searchHiAnime(searchQuery).collect { result ->
+                if (result is Result.Success) {
+                    val searchResults = result.data
+                    val matchedItem = searchResults.find { anime ->
+                        val animeBaseTitle = anime.title
+                            .replace(Regex("(?i)\\s*\\(uncut\\)"), "")
+                            .replace(Regex("(?i)\\s*\\(uncensored\\)"), "")
+                            .replace(Regex("(?i)\\s*\\(censored\\)"), "")
+                            .replace(Regex("(?i)\\s*\\(tv-broadcast\\)"), "")
+                            .replace(Regex("(?i)\\s*\\(tv\\)"), "")
+                            .trim()
+
+                        val isBaseMatch = animeBaseTitle.equals(baseTitle, ignoreCase = true) ||
+                                anime.title.contains(baseTitle, ignoreCase = true)
+                        val isItemUncut = anime.title.contains("uncut", ignoreCase = true) ||
+                                anime.title.contains("uncensored", ignoreCase = true) ||
+                                anime.id.contains("-uncut", ignoreCase = true)
+
+                        isBaseMatch && (isItemUncut == targetIsUncut)
+                    }
+                    if (matchedItem != null) {
+                        matchedAnikotoId = matchedItem.id
+                    }
+                }
+            }
+
+            if (matchedAnikotoId != null && matchedAnikotoId != currentId) {
+                // Fetch episodes of matching alternative version
+                repository.getEpisodes(matchedAnikotoId!!, false).collect { result ->
+                    if (result is Result.Success) {
+                        val matchingEp = result.data.find { it.number == currentEp.number } ?: result.data.firstOrNull()
+                        if (matchingEp != null) {
+                            onStatusMsg("Switched/Reloading ${if (targetIsUncut) "Uncut (Uncensored)" else "TV (Censored)"} version!")
+                            initialize(matchedAnikotoId!!, matchingEp.id, defaultAudioCategory.lowercase())
+                        } else {
+                            onStatusMsg("Corresponding episode of ${if (targetIsUncut) "Uncut" else "TV"} version not found.")
+                        }
+                    } else if (result is Result.Error) {
+                        onStatusMsg("Failed to load alternative episodes.")
+                    }
+                }
+            } else {
+                preferenceManager.preferredAnimeVersion = if (isCurrentUncut) "uncensored" else "censored"
+                onStatusMsg("Alternative ${if (targetIsUncut) "Uncut" else "TV Broadcast"} version not available for this series.")
+            }
+        }
+    }
 
 
     private val _uiState = MutableStateFlow<PlayerUiState>(PlayerUiState.Loading)

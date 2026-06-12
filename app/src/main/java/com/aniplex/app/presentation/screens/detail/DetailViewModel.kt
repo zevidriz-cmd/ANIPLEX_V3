@@ -31,8 +31,221 @@ class DetailViewModel @Inject constructor(
     private val repository: AnimeRepository,
     private val firestore: FirebaseFirestore,
     private val auth: FirebaseAuth,
-    private val profileManager: ProfileManager
+    private val profileManager: ProfileManager,
+    private val preferenceManager: com.aniplex.app.data.local.preferences.PreferenceManager
 ) : ViewModel() {
+
+    private val _selectedVersion = MutableStateFlow(preferenceManager.preferredAnimeVersion)
+    val selectedVersion: StateFlow<String> = _selectedVersion.asStateFlow()
+
+    private val _hasMultipleVersions = MutableStateFlow(false)
+    val hasMultipleVersions: StateFlow<Boolean> = _hasMultipleVersions.asStateFlow()
+
+    private fun checkForAlternativeVersions(animeDetail: AnimeDetail) {
+        val currentId = animeDetail.id
+        val malId = animeDetail.malId
+        if (currentId == "6245" || malId == "50392" || currentId == "5926" || malId == "54722") {
+            _hasMultipleVersions.value = true
+            return
+        }
+
+        _hasMultipleVersions.value = false
+        viewModelScope.launch {
+            val currentTitle = animeDetail.name
+            val currentId = animeDetail.id
+            val isCurrentUncut = currentTitle.contains("uncut", ignoreCase = true) ||
+                    currentTitle.contains("uncensored", ignoreCase = true) ||
+                    currentId.contains("-uncut", ignoreCase = true)
+
+            val baseTitle = currentTitle
+                .replace(Regex("(?i)\\s*\\(uncut\\)"), "")
+                .replace(Regex("(?i)\\s*\\(uncensored\\)"), "")
+                .replace(Regex("(?i)\\s*\\(censored\\)"), "")
+                .replace(Regex("(?i)\\s*\\(tv-broadcast\\)"), "")
+                .replace(Regex("(?i)\\s*\\(tv\\)"), "")
+                .trim()
+
+            var hasAlt = false
+
+            // Check 1: Seasons
+            val currentSeasons = (_seasonsState.value as? DetailState.Success)?.data ?: emptyList()
+            if (currentSeasons.isNotEmpty()) {
+                val hasInSeasons = currentSeasons.any { season ->
+                    val seasonBaseTitle = season.title
+                        .replace(Regex("(?i)\\s*\\(uncut\\)"), "")
+                        .replace(Regex("(?i)\\s*\\(uncensored\\)"), "")
+                        .replace(Regex("(?i)\\s*\\(censored\\)"), "")
+                        .replace(Regex("(?i)\\s*\\(tv-broadcast\\)"), "")
+                        .replace(Regex("(?i)\\s*\\(tv\\)"), "")
+                        .trim()
+
+                    val isBaseMatch = seasonBaseTitle.equals(baseTitle, ignoreCase = true)
+                    val isSeasonUncut = season.title.contains("uncut", ignoreCase = true) ||
+                            season.title.contains("uncensored", ignoreCase = true)
+
+                    isBaseMatch && (isSeasonUncut != isCurrentUncut)
+                }
+                if (hasInSeasons) {
+                    hasAlt = true
+                }
+            }
+
+            // Check 2: Scraper Search directly on hianime
+            if (!hasAlt) {
+                val searchQuery = if (!isCurrentUncut) "$baseTitle uncut" else baseTitle
+                repository.searchHiAnime(searchQuery).collect { result ->
+                    if (result is Result.Success) {
+                        val searchResults = result.data
+                        val hasInSearch = searchResults.any { anime ->
+                            val animeBaseTitle = anime.title
+                                .replace(Regex("(?i)\\s*\\(uncut\\)"), "")
+                                .replace(Regex("(?i)\\s*\\(uncensored\\)"), "")
+                                .replace(Regex("(?i)\\s*\\(censored\\)"), "")
+                                .replace(Regex("(?i)\\s*\\(tv-broadcast\\)"), "")
+                                .replace(Regex("(?i)\\s*\\(tv\\)"), "")
+                                .trim()
+
+                            val isBaseMatch = animeBaseTitle.equals(baseTitle, ignoreCase = true) ||
+                                    anime.title.contains(baseTitle, ignoreCase = true)
+                            val isItemUncut = anime.title.contains("uncut", ignoreCase = true) ||
+                                    anime.title.contains("uncensored", ignoreCase = true) ||
+                                    anime.id.contains("-uncut", ignoreCase = true)
+
+                            isBaseMatch && (isItemUncut != isCurrentUncut)
+                        }
+                        if (hasInSearch) {
+                            hasAlt = true
+                        }
+                    }
+                }
+            }
+
+            _hasMultipleVersions.value = hasAlt
+        }
+    }
+
+    fun setSelectedVersion(version: String) {
+        val currentDetail = (detailState.value as? DetailState.Success)?.data
+        if (currentDetail == null) {
+            _selectedVersion.value = version
+            preferenceManager.preferredAnimeVersion = version
+            return
+        }
+
+        val currentTitle = currentDetail.name
+        val currentId = currentDetail.id
+        val malId = currentDetail.malId
+
+        // Option A Manual Redirection Bypass for "Chained Soldier" and "Gushing over Magical Girls"
+        if (currentId == "6245" || malId == "50392" || currentId == "5926" || malId == "54722") {
+            _selectedVersion.value = version
+            preferenceManager.preferredAnimeVersion = version
+            _resolutionError.value = "Switched to ${if (version == "uncensored") "Uncut (Uncensored)" else "TV (Censored)"} version!"
+            return
+        }
+
+        // Check if current anime in view has uncut keywords
+        val isCurrentUncut = currentTitle.contains("uncut", ignoreCase = true) ||
+                currentTitle.contains("uncensored", ignoreCase = true) ||
+                currentId.contains("-uncut", ignoreCase = true)
+
+        val targetIsUncut = version == "uncensored"
+
+        if (isCurrentUncut == targetIsUncut) {
+            _selectedVersion.value = version
+            preferenceManager.preferredAnimeVersion = version
+            _resolutionError.value = "Already viewing ${if (targetIsUncut) "Uncut (Uncensored)" else "TV (Censored)"} version."
+            return
+        }
+
+        _isResolvingSeason.value = true
+        _resolutionError.value = "Searching for ${if (targetIsUncut) "Uncut" else "TV"} version..."
+
+        viewModelScope.launch {
+            val baseTitle = currentTitle
+                .replace(Regex("(?i)\\s*\\(uncut\\)"), "")
+                .replace(Regex("(?i)\\s*\\(uncensored\\)"), "")
+                .replace(Regex("(?i)\\s*\\(censored\\)"), "")
+                .replace(Regex("(?i)\\s*\\(tv-broadcast\\)"), "")
+                .replace(Regex("(?i)\\s*\\(tv\\)"), "")
+                .trim()
+
+            var matchedAnikotoId: String? = null
+
+            // 1. First, search alternative seasons/relations
+            val currentSeasons = (_seasonsState.value as? DetailState.Success)?.data ?: emptyList()
+            if (currentSeasons.isNotEmpty()) {
+                val candidateSeason = currentSeasons.find { season ->
+                    val seasonBaseTitle = season.title
+                        .replace(Regex("(?i)\\s*\\(uncut\\)"), "")
+                        .replace(Regex("(?i)\\s*\\(uncensored\\)"), "")
+                        .replace(Regex("(?i)\\s*\\(censored\\)"), "")
+                        .replace(Regex("(?i)\\s*\\(tv-broadcast\\)"), "")
+                        .replace(Regex("(?i)\\s*\\(tv\\)"), "")
+                        .trim()
+
+                    val isBaseMatch = seasonBaseTitle.equals(baseTitle, ignoreCase = true)
+                    val isSeasonUncut = season.title.contains("uncut", ignoreCase = true) ||
+                            season.title.contains("uncensored", ignoreCase = true)
+
+                    isBaseMatch && (isSeasonUncut == targetIsUncut)
+                }
+
+                if (candidateSeason != null) {
+                    repository.resolveMAL(candidateSeason.malId).collect { result ->
+                        if (result is Result.Success) {
+                            matchedAnikotoId = result.data
+                        }
+                    }
+                }
+            }
+
+            // 2. Second, fallback to HiAnime scraper search directly
+            if (matchedAnikotoId == null) {
+                val searchQuery = if (targetIsUncut) "$baseTitle uncut" else baseTitle
+                repository.searchHiAnime(searchQuery).collect { result ->
+                    if (result is Result.Success) {
+                        val searchResults = result.data
+                        val matchedItem = searchResults.find { anime ->
+                            val animeBaseTitle = anime.title
+                                .replace(Regex("(?i)\\s*\\(uncut\\)"), "")
+                                .replace(Regex("(?i)\\s*\\(uncensored\\)"), "")
+                                .replace(Regex("(?i)\\s*\\(censored\\)"), "")
+                                .replace(Regex("(?i)\\s*\\(tv-broadcast\\)"), "")
+                                .replace(Regex("(?i)\\s*\\(tv\\)"), "")
+                                .trim()
+
+                            val isBaseMatch = animeBaseTitle.equals(baseTitle, ignoreCase = true) ||
+                                    anime.title.contains(baseTitle, ignoreCase = true)
+                            val isItemUncut = anime.title.contains("uncut", ignoreCase = true) ||
+                                    anime.title.contains("uncensored", ignoreCase = true) ||
+                                    anime.id.contains("-uncut", ignoreCase = true)
+
+                            isBaseMatch && (isItemUncut == targetIsUncut)
+                        }
+                        if (matchedItem != null) {
+                            matchedAnikotoId = matchedItem.id
+                        }
+                    }
+                }
+            }
+
+            _isResolvingSeason.value = false
+
+            if (matchedAnikotoId != null && matchedAnikotoId != currentId) {
+                _selectedVersion.value = version
+                preferenceManager.preferredAnimeVersion = version
+                _resolvedAnikotoId.value = matchedAnikotoId
+                _resolutionError.value = "Switched to ${if (targetIsUncut) "Uncut (Uncensored)" else "TV (Censored)"} version!"
+            } else {
+                // Revert visual selection since we didn't find the alternate version
+                val revertedVersion = if (isCurrentUncut) "uncensored" else "censored"
+                _selectedVersion.value = revertedVersion
+                preferenceManager.preferredAnimeVersion = revertedVersion
+                _resolutionError.value = "Alternative ${if (targetIsUncut) "Uncut" else "TV Broadcast"} version not available for this series."
+            }
+        }
+    }
 
     private val _detailState = MutableStateFlow<DetailState<AnimeDetail>>(DetailState.Loading)
     val detailState: StateFlow<DetailState<AnimeDetail>> = _detailState.asStateFlow()
@@ -93,6 +306,13 @@ class DetailViewModel @Inject constructor(
                     is Result.Loading -> _detailState.value = DetailState.Loading
                     is Result.Success -> {
                         _detailState.value = DetailState.Success(result.data)
+                        // Sync visual selector to match loaded content version
+                        val hasUncutKeywords = result.data.name.contains("uncut", ignoreCase = true) ||
+                                result.data.name.contains("uncensored", ignoreCase = true) ||
+                                result.data.id.contains("-uncut", ignoreCase = true)
+                        _selectedVersion.value = if (hasUncutKeywords) "uncensored" else "censored"
+                        checkForAlternativeVersions(result.data)
+
                         // Load seasons when detail is available
                         if (result.data.malId.isNotBlank()) {
                             val currentSeasons = (_seasonsState.value as? DetailState.Success)?.data ?: emptyList()

@@ -99,71 +99,6 @@ fun SearchScreen(
         ) {
             Spacer(modifier = Modifier.height(16.dp))
 
-            if (recentSearches.isNotEmpty()) {
-                Column(modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Recent Searches",
-                            color = Color.LightGray,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            text = "Clear All",
-                            color = CrunchyrollOrange,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.clickable { viewModel.clearRecentSearches() }
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(6.dp))
-                    androidx.compose.foundation.lazy.LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        items(recentSearches) { query ->
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(SurfaceDark)
-                                    .border(1.dp, SurfaceDarkVariant, RoundedCornerShape(8.dp))
-                                    .clickable {
-                                        viewModel.onQueryChange(query)
-                                        viewModel.performSearch()
-                                        keyboardController?.hide()
-                                        focusManager.clearFocus()
-                                    }
-                                    .padding(horizontal = 10.dp, vertical = 6.dp)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    Text(
-                                        text = query,
-                                        color = Color.White,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Remove",
-                                        tint = Color.Gray,
-                                        modifier = Modifier
-                                            .size(12.dp)
-                                            .clickable { viewModel.removeRecentSearch(query) }
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
             // 1. Search Bar Outlined Input with keyboard controller support
             OutlinedTextField(
                 value = searchQuery,
@@ -238,6 +173,72 @@ fun SearchScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
+            if (recentSearches.isNotEmpty()) {
+                Column(modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Recent Searches",
+                            color = Color.LightGray,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "Clear All",
+                            color = CrunchyrollOrange,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.clickable { viewModel.clearRecentSearches() }
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    androidx.compose.foundation.lazy.LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        items(recentSearches) { query ->
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(SurfaceDark)
+                                    .border(1.dp, SurfaceDarkVariant, RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        viewModel.onQueryChange(query)
+                                        viewModel.performSearch()
+                                        keyboardController?.hide()
+                                        focusManager.clearFocus()
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = query,
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Remove",
+                                        tint = Color.Gray,
+                                        modifier = Modifier
+                                            .size(12.dp)
+                                            .clickable { viewModel.removeRecentSearch(query) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
             // 2. Main Search Content Areas
             Box(
                 modifier = Modifier
@@ -268,6 +269,7 @@ fun SearchScreen(
                                 AnimeCard(anime = anime, onClick = {
                                     focusManager.clearFocus()
                                     keyboardController?.hide()
+                                    viewModel.recordSearchQuery(searchQuery)
                                     onAnimeClick(it)
                                 })
                             }
@@ -334,6 +336,7 @@ fun SearchScreen(
                                             isSearchFieldFocused = false
                                             focusManager.clearFocus()
                                             keyboardController?.hide()
+                                            viewModel.recordSearchQuery(searchQuery)
                                             onAnimeClick(item.id)
                                         }
                                         .padding(8.dp),

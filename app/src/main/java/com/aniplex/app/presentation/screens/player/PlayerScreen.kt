@@ -154,6 +154,8 @@ data class PlayerScreenState(
     val showQualityDialog: Boolean,
     val showSpeedDialog: Boolean,
     val showSubtitleSizeDialog: Boolean,
+    val showVersionDialog: Boolean,
+    val preferredAnimeVersion: String,
     val metadataScrollState: ScrollState,
     val settingsScrollState: ScrollState
 )
@@ -197,7 +199,9 @@ data class PlayerCallbacks(
     val onShowSubtitlesDialogChange: (Boolean) -> Unit,
     val onShowQualityDialogChange: (Boolean) -> Unit,
     val onShowSpeedDialogChange: (Boolean) -> Unit,
-    val onShowSubtitleSizeDialogChange: (Boolean) -> Unit
+    val onShowSubtitleSizeDialogChange: (Boolean) -> Unit,
+    val onVersionChange: (String) -> Unit,
+    val onShowVersionDialogChange: (Boolean) -> Unit
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -276,6 +280,8 @@ fun PlayerScreen(
     var showQualityDialog by remember { mutableStateOf(false) }
     var showSpeedDialog by remember { mutableStateOf(false) }
     var showSubtitleSizeDialog by remember { mutableStateOf(false) }
+    var showVersionDialog by remember { mutableStateOf(false) }
+    var preferredAnimeVersion by remember { mutableStateOf(viewModel.preferredAnimeVersion) }
 
     // Scroll states
     val metadataScrollState = rememberScrollState()
@@ -911,6 +917,8 @@ fun PlayerScreen(
         showQualityDialog = showQualityDialog,
         showSpeedDialog = showSpeedDialog,
         showSubtitleSizeDialog = showSubtitleSizeDialog,
+        showVersionDialog = showVersionDialog,
+        preferredAnimeVersion = preferredAnimeVersion,
         metadataScrollState = metadataScrollState,
         settingsScrollState = settingsScrollState
     )
@@ -1039,7 +1047,14 @@ fun PlayerScreen(
         onShowSubtitlesDialogChange = { showSubtitlesDialog = it },
         onShowQualityDialogChange = { showQualityDialog = it },
         onShowSpeedDialogChange = { showSpeedDialog = it },
-        onShowSubtitleSizeDialogChange = { showSubtitleSizeDialog = it }
+        onShowSubtitleSizeDialogChange = { showSubtitleSizeDialog = it },
+        onVersionChange = { targetVersion ->
+            viewModel.setPreferredAnimeVersion(targetVersion) { msg ->
+                android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+                preferredAnimeVersion = viewModel.preferredAnimeVersion
+            }
+        },
+        onShowVersionDialogChange = { showVersionDialog = it }
     )
 
     PlayerScreenContent(
@@ -2034,6 +2049,14 @@ fun PlaybackSettingsOverlay(
             )
             HorizontalDivider(color = Color(0xFF1F1F1F), thickness = 1.dp)
 
+            // Anime Version Row (Censored/Uncensored)
+            SettingsClickableRow(
+                label = "Release Version",
+                value = if (state.preferredAnimeVersion == "uncensored") "Uncut (Uncensored)" else "TV (Censored)",
+                onClick = { callbacks.onShowVersionDialogChange(true) }
+            )
+            HorizontalDivider(color = Color(0xFF1F1F1F), thickness = 1.dp)
+
             // Report a Problem Row
             SettingsClickableRow(
                 label = "Report a Problem",
@@ -2046,6 +2069,28 @@ fun PlaybackSettingsOverlay(
         }
 
         // Dialogs
+        if (state.showVersionDialog) {
+            SettingsDialog(
+                title = "Select Anime Version",
+                onDismiss = { callbacks.onShowVersionDialogChange(false) }
+            ) {
+                val options = listOf("uncensored" to "Uncut (Uncensored)", "censored" to "TV Broadcast (Censored)")
+                LazyColumn {
+                    items(options) { (key, label) ->
+                        SettingsDialogRow(
+                            label = label,
+                            selected = state.preferredAnimeVersion == key,
+                            onClick = {
+                                callbacks.onVersionChange(key)
+                                Toast.makeText(context, "Preference set to: $label", Toast.LENGTH_SHORT).show()
+                                callbacks.onShowVersionDialogChange(false)
+                            }
+                        )
+                    }
+                }
+            }
+        }
+
         if (state.showAudioDialog) {
             SettingsDialog(
                 title = "Select Audio Language",
