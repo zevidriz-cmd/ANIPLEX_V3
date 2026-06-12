@@ -58,6 +58,7 @@ fun SearchScreen(
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     val suggestions by viewModel.suggestions.collectAsStateWithLifecycle()
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val recentSearches by viewModel.recentSearches.collectAsStateWithLifecycle()
 
     val selectedType by viewModel.selectedType.collectAsStateWithLifecycle()
     val selectedStatus by viewModel.selectedStatus.collectAsStateWithLifecycle()
@@ -97,6 +98,71 @@ fun SearchScreen(
                 .padding(horizontal = 16.dp)
         ) {
             Spacer(modifier = Modifier.height(16.dp))
+
+            if (recentSearches.isNotEmpty()) {
+                Column(modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Recent Searches",
+                            color = Color.LightGray,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "Clear All",
+                            color = CrunchyrollOrange,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.clickable { viewModel.clearRecentSearches() }
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    androidx.compose.foundation.lazy.LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        items(recentSearches) { query ->
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(SurfaceDark)
+                                    .border(1.dp, SurfaceDarkVariant, RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        viewModel.onQueryChange(query)
+                                        viewModel.performSearch()
+                                        keyboardController?.hide()
+                                        focusManager.clearFocus()
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = query,
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Remove",
+                                        tint = Color.Gray,
+                                        modifier = Modifier
+                                            .size(12.dp)
+                                            .clickable { viewModel.removeRecentSearch(query) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             // 1. Search Bar Outlined Input with keyboard controller support
             OutlinedTextField(
@@ -222,6 +288,10 @@ fun SearchScreen(
                     is SearchUiState.Empty -> {
                         SearchEmptyState(
                             query = searchQuery,
+                            selectedType = selectedType,
+                            selectedStatus = selectedStatus,
+                            selectedLanguage = selectedLanguage,
+                            selectedGenres = selectedGenres,
                             onClearFilters = {
                                 viewModel.clearFilters()
                                 viewModel.onQueryChange("")
@@ -598,7 +668,14 @@ fun SearchIdleState(onGenreClick: (String) -> Unit) {
 }
 
 @Composable
-fun SearchEmptyState(query: String, onClearFilters: () -> Unit) {
+fun SearchEmptyState(
+    query: String,
+    selectedType: String?,
+    selectedStatus: String?,
+    selectedLanguage: String?,
+    selectedGenres: Set<String>,
+    onClearFilters: () -> Unit
+) {
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
@@ -621,8 +698,26 @@ fun SearchEmptyState(query: String, onClearFilters: () -> Unit) {
                 fontWeight = FontWeight.Bold
             )
             Spacer(modifier = Modifier.height(6.dp))
+            
+            val filterTexts = mutableListOf<String>()
+            selectedType?.let { filterTexts.add(it.uppercase()) }
+            selectedLanguage?.let { filterTexts.add(it.uppercase()) }
+            if (selectedGenres.isNotEmpty()) {
+                filterTexts.add("${selectedGenres.size} genres")
+            }
+            
+            val messageText = if (query.isNotBlank()) {
+                if (filterTexts.isNotEmpty()) {
+                    "No ${filterTexts.joinToString(", ")} found for \"$query\""
+                } else {
+                    "No anime found for \"$query\""
+                }
+            } else {
+                "No anime matches the selected filters."
+            }
+
             Text(
-                text = if (query.isNotBlank()) "No anime found for \"$query\"" else "No anime matches the selected filters.",
+                text = messageText,
                 fontSize = 13.sp,
                 color = Color.Gray,
                 textAlign = TextAlign.Center

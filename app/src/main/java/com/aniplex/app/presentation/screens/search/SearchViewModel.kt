@@ -19,10 +19,20 @@ sealed interface SearchUiState {
     data object Empty : SearchUiState
 }
 
+data class SearchTrigger(
+    val query: String,
+    val type: String?,
+    val status: String?,
+    val sort: String?,
+    val lang: String?,
+    val genres: Set<String>
+)
+
 @OptIn(FlowPreview::class)
 @HiltViewModel
 class SearchViewModel @Inject constructor(
-    private val repository: AnimeRepository
+    private val repository: AnimeRepository,
+    private val preferenceManager: com.aniplex.app.data.local.preferences.PreferenceManager
 ) : ViewModel() {
 
     private val _searchQuery = MutableStateFlow("")
@@ -33,6 +43,9 @@ class SearchViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow<SearchUiState>(SearchUiState.Idle)
     val uiState: StateFlow<SearchUiState> = _uiState.asStateFlow()
+
+    private val _recentSearches = MutableStateFlow<List<String>>(emptyList())
+    val recentSearches: StateFlow<List<String>> = _recentSearches.asStateFlow()
 
     // Filter states
     val selectedType = MutableStateFlow<String?>(null)
@@ -117,38 +130,62 @@ class SearchViewModel @Inject constructor(
     }
 
     init {
-        // Debounce search query changes:
-        // 1. Fetch suggestions overlay immediately (300ms)
-        // 2. Automatically perform full-grid query (500ms)
+        _recentSearches.value = preferenceManager.getRecentSearches()
+
+        // Redesigned with combined reactive flows to dynamically support:
+        // 1. Live debounced query suggestions
+        // 2. Real-time automatic filter applications (reactive updates)
+        // 3. Proper search query scoping when combining filters
         viewModelScope.launch {
-            searchQuery
-                .debounce(500)
-                .distinctUntilChanged()
-                .collect { query ->
-                    val q = query.trim()
-                    if (q.isNotBlank()) {
-                        if (q.length >= 2) {
-                            // Fetch suggestions
-                            repository.getSuggestions(q).collect { result ->
-                                if (result is Result.Success) {
-                                    val ranked = result.data.map { anime ->
-                                        val score = calculateMatchScore(q, anime)
-                                        anime to score
-                                    }.sortedWith(
-                                        compareByDescending<Pair<Anime, Int>> { it.second }
-                                            .thenBy { it.first.title }
-                                    ).map { it.first }
-                                    _suggestions.value = ranked
-                                }
-                            }
+            combine(
+                _searchQuery,
+                selectedType,
+                selectedStatus,
+                selectedSort,
+                selectedLanguage,
+                selectedGenres
+            ) { array ->
+                val query = array[0] as String
+                val type = array[1] as String?
+                val status = array[2] as String?
+                val sort = array[3] as String?
+                val lang = array[4] as String?
+                @Suppress("UNCHECKED_CAST")
+                val genres = array[5] as Set<String>
+                SearchTrigger(query, type, status, sort, lang, genres)
+            }
+            .debounce(300)
+            .collectLatest { trigger ->
+                val q = trigger.query.trim()
+                
+                // Keep the live suggestions updated in parallel
+                if (q.length >= 2) {
+                    repository.getSuggestions(q).collect { result ->
+                        if (result is Result.Success) {
+                            val ranked = result.data.map { anime ->
+                                val score = calculateMatchScore(q, anime)
+                                anime to score
+                            }.sortedWith(
+                                compareByDescending<Pair<Anime, Int>> { it.second }
+                                    .thenBy { it.first.title }
+                            ).map { it.first }
+                            _suggestions.value = ranked
                         }
-                        // Perform search
-                        performSearch(isNewSearch = true)
-                    } else {
-                        _suggestions.value = emptyList()
-                        _uiState.value = SearchUiState.Idle
                     }
+                } else {
+                    _suggestions.value = emptyList()
                 }
+
+                val hasFilters = trigger.type != null || trigger.status != null || 
+                        trigger.sort != null || trigger.lang != null || trigger.genres.isNotEmpty()
+
+                if (q.isNotEmpty() || hasFilters) {
+                    performSearch(isNewSearch = true)
+                } else {
+                    _suggestions.value = emptyList()
+                    _uiState.value = SearchUiState.Idle
+                }
+            }
         }
     }
 
@@ -174,9 +211,20 @@ class SearchViewModel @Inject constructor(
 
         val hasFilters = typeVal != null || statusVal != null || sortVal != null || langVal != null || genresVal.isNotEmpty()
 
+        if (isNewSearch && queryVal.isNotEmpty()) {
+            recordSearchQuery(queryVal)
+        }
+
         viewModelScope.launch {
-            val flowResult = if (hasFilters) {
-                // If filters are present, use the advanced filter endpoint
+            val flowResult = if (queryVal.isNotEmpty()) {
+                // If there is an active search query, always use the search endpoint to preserve the query scope!
+                repository.search(queryVal, currentPage)
+            } else {
+                // Otherwise use the advanced filter API directly
+                if (!hasFilters) {
+                    _uiState.value = SearchUiState.Idle
+                    return@launch
+                }
                 repository.filterAnime(
                     type = typeVal,
                     status = statusVal,
@@ -185,13 +233,6 @@ class SearchViewModel @Inject constructor(
                     language = langVal,
                     page = currentPage
                 )
-            } else {
-                // Otherwise use the standard text search endpoint
-                if (queryVal.isEmpty()) {
-                    _uiState.value = SearchUiState.Idle
-                    return@launch
-                }
-                repository.search(queryVal, currentPage)
             }
 
             flowResult.collect { result ->
@@ -203,9 +244,29 @@ class SearchViewModel @Inject constructor(
                         isCurrentlyLoadingNextPage = false
                         val newItems = result.data
                         
+                        // Apply strict scoping client-side filters on search results if query is active
+                        val filteredItems = if (queryVal.isNotEmpty() && hasFilters) {
+                            newItems.filter { anime ->
+                                val matchesType = typeVal == null || run {
+                                    val aType = anime.type.replace(" ", "").replace("-", "").lowercase()
+                                    val fType = typeVal.replace(" ", "").replace("-", "").lowercase()
+                                    aType == fType || aType.contains(fType) || fType.contains(aType)
+                                }
+                                val matchesLanguage = langVal == null || when (langVal) {
+                                    "sub" -> anime.subEpisodes > 0
+                                    "dub" -> anime.dubEpisodes > 0
+                                    "sub-dub" -> anime.subEpisodes > 0 || anime.dubEpisodes > 0
+                                    else -> true
+                                }
+                                matchesType && matchesLanguage
+                            }
+                        } else {
+                            newItems
+                        }
+
                         // Apply smart fuzzy-match sorting/ranking on search results
                         val rankedItems = if (queryVal.isNotBlank() && !hasFilters) {
-                            newItems.map { anime ->
+                            filteredItems.map { anime ->
                                 val score = calculateMatchScore(queryVal, anime)
                                 anime to score
                             }.sortedWith(
@@ -213,7 +274,7 @@ class SearchViewModel @Inject constructor(
                                     .thenBy { it.first.title }
                             ).map { it.first }
                         } else {
-                            newItems
+                            filteredItems
                         }
 
                         allResults.addAll(rankedItems)
@@ -260,5 +321,28 @@ class SearchViewModel @Inject constructor(
         selectedSort.value = null
         selectedLanguage.value = null
         selectedGenres.value = emptySet()
+    }
+
+    fun recordSearchQuery(query: String) {
+        val q = query.trim()
+        if (q.isBlank()) return
+        val currentList = _recentSearches.value.toMutableList()
+        currentList.remove(q)
+        currentList.add(0, q)
+        val limited = currentList.take(5)
+        _recentSearches.value = limited
+        preferenceManager.saveRecentSearches(limited)
+    }
+
+    fun removeRecentSearch(query: String) {
+        val currentList = _recentSearches.value.toMutableList()
+        currentList.remove(query)
+        _recentSearches.value = currentList
+        preferenceManager.saveRecentSearches(currentList)
+    }
+
+    fun clearRecentSearches() {
+        _recentSearches.value = emptyList()
+        preferenceManager.saveRecentSearches(emptyList())
     }
 }

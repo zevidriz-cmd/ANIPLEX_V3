@@ -35,6 +35,8 @@ import androidx.compose.material.icons.filled.StarHalf
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.*
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
@@ -798,6 +800,65 @@ fun DetailContent(
                             // Current selected season is the one that matches this anime's title or the first one if we can't figure it out
                             val currentSeason = seasons.find { it.malId == animeDetail.malId } ?: seasons.firstOrNull()
                             
+                            val groupedSeasons = remember(seasons) {
+                                val result = mutableListOf<SeasonGroup>()
+                                val processed = mutableSetOf<String>()
+                                
+                                for (season in seasons) {
+                                    if (season.malId in processed) continue
+                                    
+                                    val alts = seasons.filter { other ->
+                                        other.malId != season.malId && 
+                                        other.malId !in processed && 
+                                        run {
+                                            val t1 = season.title.lowercase().replace(":", "").replace("-", " ")
+                                            val t2 = other.title.lowercase().replace(":", "").replace("-", " ")
+                                            
+                                            val keywords = listOf(
+                                                "mugen train", "mugen ressha",
+                                                "entertainment district", "yuukaku",
+                                                "swordsmith village", "katanakaji",
+                                                "hashira training", "hashira geiko",
+                                                "solo leveling", "my hero academia",
+                                                "shingeki no kyojin", "attack on titan",
+                                                "recap", "special"
+                                            )
+                                            
+                                            var match = false
+                                            for (kw in keywords) {
+                                                if (t1.contains(kw) && t2.contains(kw)) {
+                                                    match = true
+                                                    break
+                                                }
+                                            }
+                                            
+                                            if (!match) {
+                                                if (season.seasonNumber > 0 && other.seasonNumber > 0 && season.seasonNumber != other.seasonNumber) {
+                                                    false
+                                                } else {
+                                                    val words1 = t1.split(" ").filter { it.length >= 5 && it != "season" && it != "movie" && it != "series" && it != "special" && it != "edition" && it != "version" }
+                                                    val words2 = t2.split(" ").filter { it.length >= 5 && it != "season" && it != "movie" && it != "series" && it != "special" && it != "edition" && it != "version" }
+                                                    val common = words1.intersect(words2)
+                                                    common.isNotEmpty()
+                                                }
+                                            } else {
+                                                if (season.seasonNumber > 0 && other.seasonNumber > 0 && season.seasonNumber != other.seasonNumber) {
+                                                    false
+                                                } else {
+                                                    true
+                                                }
+                                            }
+                                        }
+                                    }
+                                    
+                                    result.add(SeasonGroup(primary = season, alternatives = alts))
+                                    processed.add(season.malId)
+                                    alts.forEach { processed.add(it.malId) }
+                                }
+                                result
+                            }
+
+                            
                             Card(
                                 modifier = Modifier
                                     .padding(horizontal = 16.dp, vertical = 8.dp)
@@ -873,64 +934,247 @@ fun DetailContent(
                                     ) {
                                         Column(modifier = Modifier.fillMaxWidth()) {
                                             HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
-                                            seasons.forEachIndexed { idx, season ->
-                                                val isCurrent = season.malId == animeDetail.malId
-                                                Row(
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .background(
-                                                            if (isCurrent) Color.White.copy(alpha = 0.04f) else Color.Transparent
+                                            groupedSeasons.forEachIndexed { groupIdx, group ->
+                                                val primary = group.primary
+                                                val isPrimaryCurrent = primary.malId == animeDetail.malId
+                                                val isAnyInGroupCurrent = isPrimaryCurrent || group.alternatives.any { it.malId == animeDetail.malId }
+                                                val watchNum = (groupIdx + 1).toString().let { if (it.length == 1) "0$it" else it }
+                                                
+                                                Column(modifier = Modifier.fillMaxWidth()) {
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .background(
+                                                                if (isPrimaryCurrent) Color.White.copy(alpha = 0.04f) else Color.Transparent
+                                                            )
+                                                            .clickable {
+                                                                expanded = false
+                                                                if (!isPrimaryCurrent) {
+                                                                    onSeasonSelected(primary.malId)
+                                                                }
+                                                            }
+                                                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = "#$watchNum",
+                                                            color = if (isPrimaryCurrent) CrunchyrollOrange else if (isAnyInGroupCurrent) CrunchyrollOrange.copy(alpha = 0.7f) else TextSecondary,
+                                                            fontSize = 11.sp,
+                                                            fontWeight = FontWeight.Bold,
+                                                            modifier = Modifier
+                                                                .width(36.dp)
+                                                                .background(
+                                                                    if (isPrimaryCurrent) CrunchyrollOrange.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.05f),
+                                                                    RoundedCornerShape(4.dp)
+                                                                )
+                                                                .padding(vertical = 4.dp, horizontal = 4.dp),
+                                                            textAlign = TextAlign.Center
                                                         )
-                                                        .clickable {
-                                                            expanded = false
-                                                            if (!isCurrent) {
-                                                                onSeasonSelected(season.malId)
+                                                        Spacer(modifier = Modifier.width(12.dp))
+                                                        Column(modifier = Modifier.weight(1f)) {
+                                                            Text(
+                                                                text = primary.title.takeIf { it.isNotBlank() } ?: (animeDetail.name + if (primary.seasonNumber > 1) " Season ${primary.seasonNumber}" else ""),
+                                                                color = if (isPrimaryCurrent) CrunchyrollOrange else Color.White,
+                                                                fontSize = 14.sp,
+                                                                fontWeight = if (isPrimaryCurrent) FontWeight.Bold else FontWeight.Normal,
+                                                                maxLines = 1,
+                                                                overflow = TextOverflow.Ellipsis
+                                                            )
+                                                            
+                                                            val primaryTitleLower = primary.title.lowercase()
+                                                            val isPrimaryMovie = primary.episodes == 1 || primaryTitleLower.contains("movie") || primaryTitleLower.contains("film") || primaryTitleLower.contains("theatrical")
+                                                            val isPrimaryOva = primaryTitleLower.contains("ova") || primaryTitleLower.contains("o.v.a")
+                                                            val isPrimarySpecial = primaryTitleLower.contains("special") || primaryTitleLower.contains("recap") || primaryTitleLower.contains("summary")
+                                                            val isPrimaryOna = primaryTitleLower.contains("ona") || primaryTitleLower.contains("spin-off")
+
+                                                            val primaryBadgeText = when {
+                                                                isPrimaryMovie -> "MOVIE"
+                                                                isPrimaryOva -> "OVA"
+                                                                isPrimarySpecial -> "SPECIAL"
+                                                                isPrimaryOna -> "ONA"
+                                                                else -> "SERIES"
+                                                            }
+                                                            val primaryBadgeColor = if (isPrimaryMovie) CrunchyrollOrange else if (isPrimarySpecial) Color(0xFFFFD54F) else TextSecondary
+                                                            val primaryBadgeBg = if (isPrimaryMovie) CrunchyrollOrange.copy(alpha = 0.12f) else if (isPrimarySpecial) Color(0xFFFFD54F).copy(alpha = 0.1f) else Color.White.copy(alpha = 0.05f)
+                                                            val primaryBadgeBorder = if (isPrimaryMovie) CrunchyrollOrange.copy(alpha = 0.25f) else if (isPrimarySpecial) Color(0xFFFFD54F).copy(alpha = 0.2f) else Color.White.copy(alpha = 0.15f)
+                                                            val primaryBadgeIcon = if (isPrimaryMovie || isPrimaryOva) Icons.Default.Movie else if (isPrimarySpecial) Icons.Default.Star else Icons.Default.Tv
+
+                                                            Row(
+                                                                verticalAlignment = Alignment.CenterVertically,
+                                                                modifier = Modifier.padding(top = 4.dp)
+                                                            ) {
+                                                                Row(
+                                                                    verticalAlignment = Alignment.CenterVertically,
+                                                                    modifier = Modifier
+                                                                        .background(primaryBadgeBg, RoundedCornerShape(4.dp))
+                                                                        .border(1.dp, primaryBadgeBorder, RoundedCornerShape(4.dp))
+                                                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                                                ) {
+                                                                    Icon(
+                                                                        imageVector = primaryBadgeIcon,
+                                                                        contentDescription = null,
+                                                                        tint = primaryBadgeColor,
+                                                                        modifier = Modifier.size(10.dp)
+                                                                    )
+                                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                                    Text(
+                                                                        text = primaryBadgeText,
+                                                                        color = primaryBadgeColor,
+                                                                        fontSize = 8.sp,
+                                                                        fontWeight = FontWeight.Bold
+                                                                    )
+                                                                }
+
+                                                                if (!isPrimaryMovie && primary.episodes > 0) {
+                                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                                    Text(
+                                                                        text = "${primary.episodes} EPISODES",
+                                                                        color = TextSecondary,
+                                                                        fontSize = 9.sp,
+                                                                        fontWeight = FontWeight.Medium
+                                                                    )
+                                                                }
                                                             }
                                                         }
-                                                        .padding(horizontal = 16.dp, vertical = 12.dp)
-                                                ) {
-                                                    Text(
-                                                        text = "S${idx + 1}",
-                                                        color = if (isCurrent) CrunchyrollOrange else TextSecondary,
-                                                        fontSize = 12.sp,
-                                                        fontWeight = FontWeight.Bold,
-                                                        modifier = Modifier
-                                                            .width(36.dp)
-                                                            .background(
-                                                                if (isCurrent) CrunchyrollOrange.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.05f),
-                                                                RoundedCornerShape(4.dp)
-                                                            )
-                                                            .padding(vertical = 2.dp, horizontal = 4.dp),
-                                                        textAlign = TextAlign.Center
-                                                    )
-                                                    Spacer(modifier = Modifier.width(12.dp))
-                                                    Text(
-                                                        text = season.title.takeIf { it.isNotBlank() } ?: (animeDetail.name + if (season.seasonNumber > 1) " Season ${season.seasonNumber}" else ""),
-                                                        color = if (isCurrent) CrunchyrollOrange else Color.White,
-                                                        fontSize = 14.sp,
-                                                        fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
-                                                        modifier = Modifier.weight(1f),
-                                                        maxLines = 1,
-                                                        overflow = TextOverflow.Ellipsis
-                                                    )
-                                                    if (isCurrent) {
-                                                        Box(
-                                                            modifier = Modifier
-                                                                .background(CrunchyrollOrange.copy(alpha = 0.1f), RoundedCornerShape(4.dp))
-                                                                .border(1.dp, CrunchyrollOrange.copy(alpha = 0.3f), RoundedCornerShape(4.dp))
-                                                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                                                        ) {
-                                                            Text(
-                                                                text = "ACTIVE",
-                                                                color = CrunchyrollOrange,
-                                                                fontSize = 9.sp,
-                                                                fontWeight = FontWeight.Bold
-                                                            )
+                                                        if (isPrimaryCurrent) {
+                                                            Spacer(modifier = Modifier.width(8.dp))
+                                                            Box(
+                                                                modifier = Modifier
+                                                                    .background(CrunchyrollOrange.copy(alpha = 0.1f), RoundedCornerShape(4.dp))
+                                                                    .border(1.dp, CrunchyrollOrange.copy(alpha = 0.3f), RoundedCornerShape(4.dp))
+                                                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                                            ) {
+                                                                Text(
+                                                                    text = "ACTIVE",
+                                                                    color = CrunchyrollOrange,
+                                                                    fontSize = 9.sp,
+                                                                    fontWeight = FontWeight.Bold
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+                                                    
+                                                    if (group.alternatives.isNotEmpty()) {
+                                                        group.alternatives.forEach { alt ->
+                                                            val isAltCurrent = alt.malId == animeDetail.malId
+                                                            
+                                                            Row(
+                                                                verticalAlignment = Alignment.CenterVertically,
+                                                                modifier = Modifier
+                                                                    .fillMaxWidth()
+                                                                    .background(
+                                                                        if (isAltCurrent) Color.White.copy(alpha = 0.04f) else Color.Transparent
+                                                                    )
+                                                                    .clickable {
+                                                                        expanded = false
+                                                                        if (!isAltCurrent) {
+                                                                            onSeasonSelected(alt.malId)
+                                                                        }
+                                                                    }
+                                                                    .padding(start = 36.dp, end = 16.dp, top = 6.dp, bottom = 6.dp)
+                                                            ) {
+                                                                Text(
+                                                                    text = "ALT",
+                                                                    color = if (isAltCurrent) CrunchyrollOrange else TextSecondary,
+                                                                    fontSize = 9.sp,
+                                                                    fontWeight = FontWeight.Bold,
+                                                                    modifier = Modifier
+                                                                        .width(36.dp)
+                                                                        .background(
+                                                                            if (isAltCurrent) CrunchyrollOrange.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.03f),
+                                                                            RoundedCornerShape(4.dp)
+                                                                        )
+                                                                        .padding(vertical = 3.dp),
+                                                                    textAlign = TextAlign.Center
+                                                                )
+                                                                Spacer(modifier = Modifier.width(12.dp))
+                                                                Column(modifier = Modifier.weight(1f)) {
+                                                                    Text(
+                                                                        text = alt.title,
+                                                                        color = if (isAltCurrent) CrunchyrollOrange else Color.White.copy(alpha = 0.85f),
+                                                                        fontSize = 13.sp,
+                                                                        fontWeight = if (isAltCurrent) FontWeight.Bold else FontWeight.Normal,
+                                                                        maxLines = 1,
+                                                                        overflow = TextOverflow.Ellipsis
+                                                                    )
+                                                                    
+                                                                    val altTitleLower = alt.title.lowercase()
+                                                                    val isAltMovie = alt.episodes == 1 || altTitleLower.contains("movie") || altTitleLower.contains("film") || altTitleLower.contains("theatrical")
+                                                                    val isAltOva = altTitleLower.contains("ova") || altTitleLower.contains("o.v.a")
+                                                                    val isAltSpecial = altTitleLower.contains("special") || altTitleLower.contains("recap") || altTitleLower.contains("summary")
+                                                                    val isAltOna = altTitleLower.contains("ona") || altTitleLower.contains("spin-off")
+
+                                                                    val altBadgeText = when {
+                                                                        isAltMovie -> "MOVIE CUT"
+                                                                        isAltOva -> "OVA"
+                                                                        isAltSpecial -> "RECAP / SPECIAL"
+                                                                        isAltOna -> "ONA"
+                                                                        else -> "TV VERSION"
+                                                                    }
+                                                                    val altBadgeColor = if (isAltMovie) CrunchyrollOrange else if (isAltSpecial) Color(0xFFFFD54F) else TextSecondary.copy(alpha = 0.8f)
+                                                                    val altBadgeBg = if (isAltMovie) CrunchyrollOrange.copy(alpha = 0.1f) else if (isAltSpecial) Color(0xFFFFD54F).copy(alpha = 0.08f) else Color.White.copy(alpha = 0.03f)
+                                                                    val altBadgeBorder = if (isAltMovie) CrunchyrollOrange.copy(alpha = 0.2f) else if (isAltSpecial) Color(0xFFFFD54F).copy(alpha = 0.15f) else Color.White.copy(alpha = 0.1f)
+                                                                    val altBadgeIcon = if (isAltMovie || isAltOva) Icons.Default.Movie else if (isAltSpecial) Icons.Default.Star else Icons.Default.Tv
+
+                                                                    Row(
+                                                                        verticalAlignment = Alignment.CenterVertically,
+                                                                        modifier = Modifier.padding(top = 2.dp)
+                                                                    ) {
+                                                                        Row(
+                                                                            verticalAlignment = Alignment.CenterVertically,
+                                                                            modifier = Modifier
+                                                                                .background(altBadgeBg, RoundedCornerShape(4.dp))
+                                                                                .border(1.dp, altBadgeBorder, RoundedCornerShape(4.dp))
+                                                                                .padding(horizontal = 5.dp, vertical = 2.dp)
+                                                                        ) {
+                                                                            Icon(
+                                                                                imageVector = altBadgeIcon,
+                                                                                contentDescription = null,
+                                                                                tint = altBadgeColor,
+                                                                                modifier = Modifier.size(9.dp)
+                                                                            )
+                                                                            Spacer(modifier = Modifier.width(3.dp))
+                                                                            Text(
+                                                                                text = altBadgeText,
+                                                                                color = altBadgeColor,
+                                                                                fontSize = 7.5.sp,
+                                                                                fontWeight = FontWeight.Bold
+                                                                            )
+                                                                        }
+
+                                                                        if (!isAltMovie && alt.episodes > 0) {
+                                                                            Spacer(modifier = Modifier.width(6.dp))
+                                                                            Text(
+                                                                                text = "${alt.episodes} EP",
+                                                                                color = TextSecondary.copy(alpha = 0.8f),
+                                                                                fontSize = 8.5.sp,
+                                                                                fontWeight = FontWeight.Medium
+                                                                            )
+                                                                        }
+                                                                    }
+                                                                }
+                                                                if (isAltCurrent) {
+                                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                                    Box(
+                                                                        modifier = Modifier
+                                                                            .background(CrunchyrollOrange.copy(alpha = 0.1f), RoundedCornerShape(4.dp))
+                                                                            .border(1.dp, CrunchyrollOrange.copy(alpha = 0.3f), RoundedCornerShape(4.dp))
+                                                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                                                    ) {
+                                                                        Text(
+                                                                            text = "ACTIVE",
+                                                                            color = CrunchyrollOrange,
+                                                                            fontSize = 9.sp,
+                                                                            fontWeight = FontWeight.Bold
+                                                                        )
+                                                                    }
+                                                                }
+                                                            }
                                                         }
                                                     }
                                                 }
-                                                if (idx < seasons.size - 1) {
+                                                
+                                                if (groupIdx < groupedSeasons.size - 1) {
                                                     HorizontalDivider(color = Color.White.copy(alpha = 0.04f))
                                                 }
                                             }
@@ -1601,3 +1845,9 @@ fun RecommendationsTabContent(
         }
     }
 }
+
+data class SeasonGroup(
+    val primary: com.aniplex.app.domain.model.Season,
+    val alternatives: List<com.aniplex.app.domain.model.Season>
+)
+

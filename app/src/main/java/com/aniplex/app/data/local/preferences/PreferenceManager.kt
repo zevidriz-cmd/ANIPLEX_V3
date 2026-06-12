@@ -50,4 +50,15 @@ class PreferenceManager @Inject constructor(
     fun setSelectedProfileId(userId: String, profileId: String?) {
         prefs.edit().putString("selected_profile_id_$userId", profileId).apply()
     }
+
+    fun getRecentSearches(): List<String> {
+        val raw = prefs.getString("recent_searches", "") ?: ""
+        if (raw.isBlank()) return emptyList()
+        return raw.split("||").filter { it.isNotBlank() }
+    }
+
+    fun saveRecentSearches(searches: List<String>) {
+        val joined = searches.joinToString("||")
+        prefs.edit().putString("recent_searches", joined).apply()
+    }
 }

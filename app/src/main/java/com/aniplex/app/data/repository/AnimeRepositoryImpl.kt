@@ -13,6 +13,8 @@ import com.aniplex.app.domain.model.*
 import com.aniplex.app.domain.repository.AnimeRepository
 import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -492,6 +494,46 @@ class AnimeRepositoryImpl @Inject constructor(
         }
     }
 
+    private suspend fun filterReleasedSeasons(seasons: List<Season>): List<Season> {
+        if (seasons.isEmpty()) return emptyList()
+        return kotlinx.coroutines.withContext(Dispatchers.IO) {
+            kotlinx.coroutines.coroutineScope {
+                seasons.map { season ->
+                    async {
+                        val isResolvable = try {
+                            if (season.malId == "38000" || season.malId == "49926") {
+                                true
+                            } else {
+                                val cacheKey = "resolve_mal_${season.malId}"
+                                val cached = cacheDao.getCache(cacheKey)
+                                if (cached != null && cached.jsonContent.isNotBlank()) {
+                                    true
+                                } else {
+                                    val resolveResponse = apiService.resolveMAL(season.malId)
+                                    if (resolveResponse.success && resolveResponse.data != null && resolveResponse.data.anikotoId.isNotBlank()) {
+                                        cacheDao.insertCache(
+                                            CacheEntity(
+                                                cacheKey = cacheKey,
+                                                jsonContent = resolveResponse.data.anikotoId,
+                                                timestamp = System.currentTimeMillis()
+                                            )
+                                        )
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            false
+                        }
+                        season to isResolvable
+                    }
+                }.map { it.await() }
+            }
+        }.filter { it.second }.map { it.first }
+    }
+
     override fun getSeasons(malId: String, forceRefresh: Boolean): Flow<Result<List<Season>>> = flow {
         if (malId.isBlank()) {
             emit(Result.Success(emptyList()))
@@ -509,7 +551,8 @@ class AnimeRepositoryImpl @Inject constructor(
                 val cachedResponse = gson.fromJson(cachedEntity.jsonContent, SeasonsResponse::class.java)
                 val seasons = cachedResponse.data.seasons?.map { it.toDomain() } ?: emptyList()
                 if (seasons.isNotEmpty()) {
-                    emit(Result.Success(seasons))
+                    val filteredSeasons = filterReleasedSeasons(seasons)
+                    emit(Result.Success(filteredSeasons))
                     if (currentTime - cachedEntity.timestamp < SEASONS_CACHE_LIFETIME) {
                         return@flow
                     }
@@ -568,7 +611,8 @@ class AnimeRepositoryImpl @Inject constructor(
                         }
                     }
                 }
-                emit(Result.Success(seasons))
+                val filteredSeasons = filterReleasedSeasons(seasons)
+                emit(Result.Success(filteredSeasons))
             } else {
                 val errorMsg = lastException?.localizedMessage ?: "Failed to fetch seasons"
                 emit(Result.Error(errorMsg))
@@ -578,7 +622,8 @@ class AnimeRepositoryImpl @Inject constructor(
                 try {
                     val cachedResponse = gson.fromJson(cachedEntity.jsonContent, SeasonsResponse::class.java)
                     val seasons = cachedResponse.data.seasons?.map { it.toDomain() } ?: emptyList()
-                    emit(Result.Success(seasons))
+                    val filteredSeasons = filterReleasedSeasons(seasons)
+                    emit(Result.Success(filteredSeasons))
                 } catch (jsonEx: Exception) {
                     emit(Result.Error(e.localizedMessage ?: "Failed to fetch seasons"))
                 }
@@ -593,6 +638,18 @@ class AnimeRepositoryImpl @Inject constructor(
             emit(Result.Error("Blank MAL ID"))
             return@flow
         }
+
+        // Handle known duplicate MAL ID mappings (e.g., Demon Slayer S1 TV vs Sibling's Bond Movie)
+        val overrideId = when (malId) {
+            "38000" -> "1551" // Demon Slayer: Kimetsu no Yaiba S1 (26 episodes) instead of Sibling's Bond Movie (1 episode)
+            "49926" -> "17870" // Demon Slayer Mugen Train TV Arc (7 episodes)
+            else -> null
+        }
+        if (overrideId != null) {
+            emit(Result.Success(overrideId))
+            return@flow
+        }
+
         val cacheKey = "resolve_mal_$malId"
         emit(Result.Loading)
 
