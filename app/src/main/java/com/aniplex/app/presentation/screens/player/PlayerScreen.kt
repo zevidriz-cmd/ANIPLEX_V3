@@ -27,6 +27,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -1449,6 +1450,7 @@ fun ExoVideoPlayer(
     val context = LocalContext.current
     val activity = context as? Activity
     
+    var scrubbingPositionMs by remember { mutableStateOf<Long?>(null) }
     val exoPlayer = state.exoPlayerRef
 
     Box(
@@ -1849,6 +1851,43 @@ fun ExoVideoPlayer(
                             .navigationBarsPadding()
                             .padding(vertical = 8.dp)
                     ) {
+                        AnimatedVisibility(
+                            visible = scrubbingPositionMs != null,
+                            enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.slideInVertically(animationSpec = androidx.compose.animation.core.tween(150)) { it / 2 },
+                            exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.slideOutVertically(animationSpec = androidx.compose.animation.core.tween(150)) { it / 2 },
+                            modifier = Modifier.align(Alignment.CenterHorizontally)
+                        ) {
+                            scrubbingPositionMs?.let { pos ->
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(Color.Black.copy(alpha = 0.85f))
+                                        .border(1.dp, Color(0xFFF5A623), RoundedCornerShape(8.dp))
+                                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.PlayCircle,
+                                            contentDescription = null,
+                                            tint = Color(0xFFF5A623),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Text(
+                                            text = formatTime(pos),
+                                            color = Color.White,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1869,7 +1908,11 @@ fun ExoVideoPlayer(
                                         val targetPos = (fraction * state.durationMs).toLong()
                                         exoPlayer.seekTo(targetPos)
                                         callbacks.onPositionChanged(targetPos)
+                                        scrubbingPositionMs = targetPos
                                     }
+                                },
+                                onValueChangeFinished = {
+                                    scrubbingPositionMs = null
                                 },
                                 colors = SliderDefaults.colors(
                                     thumbColor = Color(0xFFF5A623),
