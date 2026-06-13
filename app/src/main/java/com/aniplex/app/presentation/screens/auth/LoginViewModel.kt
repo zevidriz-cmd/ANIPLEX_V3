@@ -61,6 +61,15 @@ class LoginViewModel @Inject constructor(
     }
 
     fun signInWithGoogle(idToken: String) {
+        if (idToken.isBlank()) {
+            _uiState.update { 
+                it.copy(
+                    isLoading = false, 
+                    error = "Google Sign-In failed: The ID token is missing. Please ensure your SHA-1 signature and package name are registered in Firebase."
+                ) 
+            }
+            return
+        }
         _uiState.update { it.copy(isLoading = true, error = null) }
         viewModelScope.launch {
             authRepository.signInWithGoogle(idToken)
@@ -71,6 +80,14 @@ class LoginViewModel @Inject constructor(
                     _uiState.update { it.copy(isLoading = false, error = exception.localizedMessage ?: "Google sign-in failed") }
                 }
         }
+    }
+
+    fun setErrorMessage(message: String) {
+        _uiState.update { it.copy(error = message, isLoading = false) }
+    }
+
+    fun setLoading(isLoading: Boolean) {
+        _uiState.update { it.copy(isLoading = isLoading) }
     }
 
     fun clearError() {

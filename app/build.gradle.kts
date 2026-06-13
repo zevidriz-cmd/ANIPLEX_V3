@@ -13,7 +13,7 @@ android {
     namespace = "com.aniplex.app"
     compileSdk = 36
     defaultConfig {
-        applicationId = "com.aniplex.app"
+        applicationId = "com.example.aniplex"
         minSdk = 26
         targetSdk = 36
         versionCode = 1

@@ -70,16 +70,24 @@ fun LoginScreen(
     ) { result ->
         val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
         try {
+            viewModel.setLoading(true)
             val account = task.getResult(ApiException::class.java)
             val idToken = account.idToken
-            if (idToken != null) {
+            if (!idToken.isNullOrBlank()) {
                 viewModel.signInWithGoogle(idToken)
             } else {
-                viewModel.signInWithGoogle("")
+                viewModel.setErrorMessage("Google Sign-In failed: The ID token is null or blank. Verify R.string.default_web_client_id matches your correct Web client ID in Firebase.")
             }
+        } catch (e: ApiException) {
+            val statusMessage = when (e.statusCode) {
+                10 -> "Developer Error (Code 10): Ensure the SHA-1 of your debug keystore is registered in your Firebase project and that your package name matches."
+                12500 -> "Sign-In Failed (Code 12500): Check description: Google Play Services or configuration mismatch. Verify your SHA-1 is registered."
+                12501 -> "Google Sign-In cancelled by user."
+                else -> "Google Sign-In failed [Code ${e.statusCode}]: ${e.localizedMessage ?: e.message}"
+            }
+            viewModel.setErrorMessage(statusMessage)
         } catch (e: Exception) {
-            // Error handling
-            viewModel.signInWithGoogle("")
+            viewModel.setErrorMessage("Google Sign-In error: ${e.localizedMessage ?: e.message}")
         }
     }
 
