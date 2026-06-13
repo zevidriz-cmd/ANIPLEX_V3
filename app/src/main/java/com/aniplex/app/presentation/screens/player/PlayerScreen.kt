@@ -74,6 +74,12 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
+import android.util.LruCache
+import androidx.compose.ui.graphics.asImageBitmap
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.aniplex.app.data.download.DownloadManager
 import com.aniplex.app.data.download.DownloadStatus
 import com.aniplex.app.theme.CrunchyrollOrange
@@ -1858,29 +1864,44 @@ fun ExoVideoPlayer(
                             modifier = Modifier.align(Alignment.CenterHorizontally)
                         ) {
                             scrubbingPositionMs?.let { pos ->
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(Color.Black.copy(alpha = 0.85f))
-                                        .border(1.dp, Color(0xFFF5A623), RoundedCornerShape(8.dp))
-                                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier.padding(bottom = 8.dp)
                                 ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ScrubbingThumbnail(
+                                        videoUrl = state.capturedStreamUrl,
+                                        positionMs = pos,
+                                        durationMs = state.durationMs,
+                                        fallbackImageUrl = state.animeDetail?.poster,
+                                        modifier = Modifier.border(1.5.dp, Color(0xFFF5A623), RoundedCornerShape(8.dp))
+                                    )
+                                    
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(Color.Black.copy(alpha = 0.85f))
+                                            .border(0.5.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
+                                            .padding(horizontal = 10.dp, vertical = 6.dp)
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Default.PlayCircle,
-                                            contentDescription = null,
-                                            tint = Color(0xFFF5A623),
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Text(
-                                            text = formatTime(pos),
-                                            color = Color.White,
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.PlayCircle,
+                                                contentDescription = null,
+                                                tint = Color(0xFFF5A623),
+                                                modifier = Modifier.size(12.dp)
+                                            )
+                                            Text(
+                                                text = formatTime(pos),
+                                                color = Color.White,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -1991,6 +2012,139 @@ private fun formatTime(ms: Long): String {
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
     return String.format("%d:%02d", minutes, seconds)
+}
+
+@Composable
+fun ScrubbingThumbnail(
+    videoUrl: String?,
+    positionMs: Long,
+    durationMs: Long,
+    fallbackImageUrl: String?,
+    modifier: Modifier = Modifier
+) {
+    var thumbnailBitmap by remember(videoUrl, positionMs) { mutableStateOf<Bitmap?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
+
+    // Keep a cache of already loaded bitmaps to make dragging extremely smooth and efficient
+    val bitmapCache = remember { LruCache<Long, Bitmap>(100) }
+
+    // Use a single MediaMetadataRetriever per videoUrl
+    val retriever = remember(videoUrl) {
+        if (!videoUrl.isNullOrEmpty()) {
+            try {
+                MediaMetadataRetriever().apply {
+                    setDataSource(videoUrl, HashMap<String, String>())
+                }
+            } catch (e: Exception) {
+                null
+            }
+        } else {
+            null
+        }
+    }
+
+    DisposableEffect(retriever) {
+        onDispose {
+            try {
+                retriever?.release()
+            } catch (e: Exception) {
+                // Ignore
+            }
+        }
+    }
+
+    // Round position to nearest 1000ms (1 second) to maximize cache hits
+    val roundedPositionS = positionMs / 1000
+
+    LaunchedEffect(videoUrl, roundedPositionS, retriever) {
+        if (retriever == null) return@LaunchedEffect
+
+        val cached = bitmapCache.get(roundedPositionS)
+        if (cached != null) {
+            thumbnailBitmap = cached
+            return@LaunchedEffect
+        }
+
+        isLoading = true
+        // Debounce dragging requests by 60ms so fast dragging doesn't choke the thread/network
+        delay(60)
+
+        withContext(Dispatchers.IO) {
+            try {
+                val timeUs = roundedPositionS * 1000 * 1000
+                val frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                if (frame != null) {
+                    val scaled = Bitmap.createScaledBitmap(frame, 240, 135, true)
+                    bitmapCache.put(roundedPositionS, scaled)
+                    withContext(Dispatchers.Main) {
+                        thumbnailBitmap = scaled
+                        isLoading = false
+                    }
+                } else {
+                    withContext(Dispatchers.Main) {
+                        isLoading = false
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    isLoading = false
+                }
+            }
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .width(160.dp)
+            .height(90.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color.Black),
+        contentAlignment = Alignment.Center
+    ) {
+        if (thumbnailBitmap != null) {
+            Image(
+                bitmap = thumbnailBitmap!!.asImageBitmap(),
+                contentDescription = "Preview Frame",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            if (!fallbackImageUrl.isNullOrEmpty()) {
+                val progressFraction = if (durationMs > 0) positionMs.toFloat() / durationMs else 0f
+                AsyncImage(
+                    model = fallbackImageUrl,
+                    contentDescription = "Preview Fallback",
+                    contentScale = ContentScale.Crop,
+                    alignment = androidx.compose.ui.BiasAlignment(
+                        horizontalBias = (progressFraction * 2f - 1f).coerceIn(-1f, 1f),
+                        verticalBias = 0f
+                    ),
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0xFF1F1F1F))
+                )
+            }
+        }
+
+        if (isLoading) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.3f)),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(
+                    color = Color(0xFFF5A623),
+                    modifier = Modifier.size(24.dp),
+                    strokeWidth = 2.dp
+                )
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

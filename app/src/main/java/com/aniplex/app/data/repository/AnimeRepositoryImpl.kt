@@ -134,7 +134,9 @@ class AnimeRepositoryImpl @Inject constructor(
         if (cachedEntity != null && !forceRefresh && (currentTime - cachedEntity.timestamp < EPISODES_CACHE_LIFETIME)) {
             try {
                 val cachedResponse = gson.fromJson(cachedEntity.jsonContent, EpisodesResponse::class.java)
-                emit(Result.Success(cachedResponse.data.episodes.map { it.toDomain() }))
+                val domainEpisodes = cachedResponse.data.episodes.map { it.toDomain() }
+                val enrichedEpisodes = syncEpisodesWithJikanFiller(id, domainEpisodes)
+                emit(Result.Success(enrichedEpisodes))
                 return@flow
             } catch (e: Exception) {
                 // Fallback to network
@@ -151,7 +153,9 @@ class AnimeRepositoryImpl @Inject constructor(
                         timestamp = currentTime
                     )
                 )
-                emit(Result.Success(response.data.episodes.map { it.toDomain() }))
+                val domainEpisodes = response.data.episodes.map { it.toDomain() }
+                val enrichedEpisodes = syncEpisodesWithJikanFiller(id, domainEpisodes)
+                emit(Result.Success(enrichedEpisodes))
             } else {
                 emit(Result.Error("API returned success = false"))
             }
@@ -159,12 +163,132 @@ class AnimeRepositoryImpl @Inject constructor(
             if (cachedEntity != null) {
                 try {
                     val cachedResponse = gson.fromJson(cachedEntity.jsonContent, EpisodesResponse::class.java)
-                    emit(Result.Success(cachedResponse.data.episodes.map { it.toDomain() }))
+                    val domainEpisodes = cachedResponse.data.episodes.map { it.toDomain() }
+                    val enrichedEpisodes = syncEpisodesWithJikanFiller(id, domainEpisodes)
+                    emit(Result.Success(enrichedEpisodes))
                 } catch (jsonEx: Exception) {
                     emit(Result.Error(e.localizedMessage ?: "Network error"))
                 }
             } else {
                 emit(Result.Error(e.localizedMessage ?: "Network error"))
+            }
+        }
+    }
+
+    private suspend fun syncEpisodesWithJikanFiller(animeId: String, episodes: List<Episode>): List<Episode> {
+        if (episodes.isEmpty()) return episodes
+        
+        var malId = ""
+        if (animeId.startsWith("mal-")) {
+            malId = animeId.substringAfter("mal-")
+        } else {
+            // First try looking up cached details
+            try {
+                val cachedDetail = getCachedAnimeDetail(animeId)
+                if (cachedDetail != null && cachedDetail.malId.isNotBlank()) {
+                    malId = cachedDetail.malId
+                }
+            } catch (e: Exception) {
+                // ignore
+            }
+            
+            // If still blank, try fetching detail via api
+            if (malId.isBlank()) {
+                try {
+                    val detailResponse = apiService.getAnimeDetail(animeId)
+                    if (detailResponse.success) {
+                        malId = detailResponse.data.anime.info.malId ?: ""
+                    }
+                } catch (e: Exception) {
+                    // ignore
+                }
+            }
+        }
+        
+        if (malId.isBlank()) {
+            return episodes
+        }
+        
+        // Fetch Jikan lists with cache check
+        val jikanCacheKey = "jikan_episodes_$malId"
+        val cachedJikan = cacheDao.getCache(jikanCacheKey)
+        val currentTime = System.currentTimeMillis()
+        val JIKAN_CACHE_LIFETIME = 7 * 24 * 60 * 60 * 1000L // 7 days cache lifetime
+        
+        val jikanEpisodes = mutableListOf<JikanEpisodeItem>()
+        
+        if (cachedJikan != null && (currentTime - cachedJikan.timestamp < JIKAN_CACHE_LIFETIME)) {
+            try {
+                val cachedList = gson.fromJson(cachedJikan.jsonContent, Array<JikanEpisodeItem>::class.java)
+                jikanEpisodes.addAll(cachedList)
+            } catch (e: Exception) {
+                // ignore
+            }
+        }
+        
+        if (jikanEpisodes.isEmpty()) {
+            try {
+                // Fetch first page
+                val firstPageUrl = "https://api.jikan.moe/v4/anime/$malId/episodes?page=1"
+                val request = okhttp3.Request.Builder().url(firstPageUrl).build()
+                val apiResponseJson = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                    val okCall = okHttpClient.newCall(request).execute()
+                    if (okCall.isSuccessful) okCall.body?.string() else null
+                }
+                
+                if (!apiResponseJson.isNullOrEmpty()) {
+                    val parsed = gson.fromJson(apiResponseJson, JikanEpisodesResponse::class.java)
+                    parsed.data?.let { jikanEpisodes.addAll(it) }
+                    val lastPage = parsed.pagination?.last_visible_page ?: 1
+                    
+                    if (lastPage > 1) {
+                        for (p in 2..lastPage) {
+                            kotlinx.coroutines.delay(350) // rate-limit backing off
+                            val nextPageUrl = "https://api.jikan.moe/v4/anime/$malId/episodes?page=$p"
+                            val nextRequest = okhttp3.Request.Builder().url(nextPageUrl).build()
+                            val nextPageJson = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                                val okCall = okHttpClient.newCall(nextRequest).execute()
+                                if (okCall.isSuccessful) okCall.body?.string() else null
+                            }
+                            if (!nextPageJson.isNullOrEmpty()) {
+                                val parsedNext = gson.fromJson(nextPageJson, JikanEpisodesResponse::class.java)
+                                parsedNext.data?.let { jikanEpisodes.addAll(it) }
+                            }
+                        }
+                    }
+                    
+                    // Cache the compiled episodes list
+                    if (jikanEpisodes.isNotEmpty()) {
+                        cacheDao.insertCache(
+                            CacheEntity(
+                                cacheKey = jikanCacheKey,
+                                jsonContent = gson.toJson(jikanEpisodes),
+                                timestamp = currentTime
+                            )
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("AnimeRepositoryImpl", "Error syncing filler with Jikan: ${e.message}")
+            }
+        }
+        
+        if (jikanEpisodes.isEmpty()) {
+            return episodes
+        }
+        
+        // Build a set of filler/recap episode numbers
+        val fillerEpisodeNumbers = jikanEpisodes.filter { it.filler == true || it.recap == true }
+            .mapNotNull { it.mal_id }
+            .toSet()
+        
+        android.util.Log.d("AnimeRepositoryImpl", "Found filler episode numbers for malId $malId: $fillerEpisodeNumbers")
+        
+        return episodes.map { ep ->
+            if (fillerEpisodeNumbers.contains(ep.number)) {
+                ep.copy(isFiller = true)
+            } else {
+                ep
             }
         }
     }
@@ -342,10 +466,233 @@ class AnimeRepositoryImpl @Inject constructor(
         return "$paddedHours:$paddedMinutes"
     }
 
+    companion object {
+        @Volatile
+        private var realWorldOffsetMillis: Long? = null
+    }
+
+    private fun calculateAiringEpisode(airedFromStr: String?, totalEpisodes: Int?): Int {
+        if (airedFromStr.isNullOrEmpty()) {
+            return totalEpisodes ?: 1
+        }
+        try {
+            val datePart = if (airedFromStr.contains("T")) {
+                airedFromStr.substringBefore("T")
+            } else {
+                airedFromStr
+            }
+            
+            val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply {
+                timeZone = java.util.TimeZone.getTimeZone("UTC")
+            }
+            val airedDate = sdf.parse(datePart) ?: return totalEpisodes ?: 1
+            
+            val currentTime = System.currentTimeMillis()
+            if (currentTime < airedDate.time) {
+                return 1
+            }
+            
+            val diffMs = currentTime - airedDate.time
+            val diffDays = diffMs / (1000L * 60 * 60 * 24)
+            val calculatedEpisode = (diffDays / 7).toInt() + 1
+            
+            if (totalEpisodes != null && totalEpisodes > 0) {
+                return calculatedEpisode.coerceAtMost(totalEpisodes)
+            }
+            return calculatedEpisode
+        } catch (e: Exception) {
+            return totalEpisodes ?: 1
+        }
+    }
+
+    private suspend fun getRealWorldDateStr(dateStr: String?): String? {
+        if (dateStr == null) return null
+        try {
+            val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+            val requestedDate = sdf.parse(dateStr) ?: return dateStr
+
+            // 1. Calculate relative offset in days from the device's actual today
+            val calDeviceToday = java.util.Calendar.getInstance()
+            calDeviceToday.set(java.util.Calendar.HOUR_OF_DAY, 0)
+            calDeviceToday.set(java.util.Calendar.MINUTE, 0)
+            calDeviceToday.set(java.util.Calendar.SECOND, 0)
+            calDeviceToday.set(java.util.Calendar.MILLISECOND, 0)
+
+            val calRequested = java.util.Calendar.getInstance()
+            calRequested.time = requestedDate
+            calRequested.set(java.util.Calendar.HOUR_OF_DAY, 0)
+            calRequested.set(java.util.Calendar.MINUTE, 0)
+            calRequested.set(java.util.Calendar.SECOND, 0)
+            calRequested.set(java.util.Calendar.MILLISECOND, 0)
+
+            val diffMs = calRequested.timeInMillis - calDeviceToday.timeInMillis
+            val diffDays = Math.round(diffMs.toDouble() / (24 * 60 * 60 * 1000)).toInt()
+
+            if (realWorldOffsetMillis == null) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    try {
+                        val endpoint = "https://aniplex-proxy.f1886391.workers.dev/ping"
+                        val connection = java.net.URL(endpoint).openConnection() as java.net.HttpURLConnection
+                        connection.requestMethod = "GET"
+                        connection.connectTimeout = 3000
+                        connection.readTimeout = 3000
+                        val dateHeader = connection.getHeaderField("Date")
+                        if (dateHeader != null) {
+                            val sdfStr = java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss", java.util.Locale.US)
+                            sdfStr.timeZone = java.util.TimeZone.getTimeZone("GMT")
+                            val cleanHeader = dateHeader.replace(" GMT", "").trim()
+                            val parsedServerDate = sdfStr.parse(cleanHeader)
+                            if (parsedServerDate != null) {
+                                realWorldOffsetMillis = parsedServerDate.time - System.currentTimeMillis()
+                            }
+                        }
+                    } catch (e: Exception) {
+                        // ignore
+                    }
+                }
+            }
+
+            val realTodayTime = System.currentTimeMillis() + (realWorldOffsetMillis ?: 0L)
+            val calRealTarget = java.util.Calendar.getInstance()
+            calRealTarget.timeInMillis = realTodayTime
+            calRealTarget.add(java.util.Calendar.DAY_OF_YEAR, diffDays)
+
+            return sdf.format(calRealTarget.time)
+        } catch (e: Exception) {
+            return dateStr
+        }
+    }
+
     override fun getSchedules(date: String?): Flow<Result<List<ScheduleItem>>> = flow {
         emit(Result.Loading)
         
-        // 1. Fetch from Jikan API directly to get real, active schedules
+        val targetDate = date ?: {
+            val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+            sdf.format(java.util.Date())
+        }()
+
+        // 1. Fetch from AniList GraphQL API (Direct accurate schedule with exact episode count and MAL link!)
+        try {
+            val (startSec, endSec) = try {
+                val sdfStr = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply {
+                    timeZone = java.util.TimeZone.getTimeZone("UTC")
+                }
+                val parsedDate = sdfStr.parse(targetDate) ?: java.util.Date()
+                val start = parsedDate.time / 1000L
+                val end = start + (24 * 60 * 60) - 1
+                Pair(start, end)
+            } catch (e: Exception) {
+                val currentMid = (System.currentTimeMillis() / 1000L) / (24 * 60 * 60) * (24 * 60 * 60)
+                Pair(currentMid, currentMid + (24 * 60 * 60) - 1)
+            }
+
+            val query = """
+                query (${'$'}start: Int, ${'$'}end: Int) {
+                  Page(page: 1, perPage: 50) {
+                    airingSchedules(airingAt_greater: ${'$'}start, airingAt_lesser: ${'$'}end, sort: TIME) {
+                      id
+                      episode
+                      airingAt
+                      media {
+                        id
+                        idMal
+                        title {
+                          english
+                          romaji
+                          userPreferred
+                        }
+                        coverImage {
+                          extraLarge
+                          large
+                        }
+                      }
+                    }
+                  }
+                }
+            """.trimIndent()
+
+            val variables = mapOf("start" to startSec, "end" to endSec)
+            val payload = mapOf("query" to query, "variables" to variables)
+            val jsonPayload = gson.toJson(payload)
+
+            val jsonString = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val url = java.net.URL("https://graphql.anilist.co")
+                val connection = url.openConnection() as java.net.HttpURLConnection
+                connection.requestMethod = "POST"
+                connection.setRequestProperty("Content-Type", "application/json")
+                connection.setRequestProperty("Accept", "application/json")
+                connection.setRequestProperty("User-Agent", "Mozilla/5.0")
+                connection.doOutput = true
+                connection.connectTimeout = 8000
+                connection.readTimeout = 8000
+
+                connection.outputStream.use { os ->
+                    val input = jsonPayload.toByteArray(charset("utf-8"))
+                    os.write(input, 0, input.size)
+                }
+
+                if (connection.responseCode == 200) {
+                    connection.inputStream.bufferedReader().use { it.readText() }
+                } else {
+                    val errorText = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                    throw java.io.IOException("AniList Http Error ${connection.responseCode}: $errorText")
+                }
+            }
+
+            val aniResponse = gson.fromJson(jsonString, AniListGraphQLResponse::class.java)
+            val schedulesList = aniResponse.data?.Page?.airingSchedules?.map { schedule ->
+                val media = schedule.media
+                val title = media?.title?.english ?: media?.title?.romaji ?: media?.title?.userPreferred ?: "Unknown Title"
+                val poster = media?.coverImage?.extraLarge ?: media?.coverImage?.large ?: ""
+                
+                val sdfTime = java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).apply {
+                    timeZone = java.util.TimeZone.getTimeZone("UTC")
+                }
+                val formattedTime = if (schedule.airingAt != null) {
+                    sdfTime.format(java.util.Date(schedule.airingAt * 1000L))
+                } else {
+                    "00:00"
+                }
+
+                val malId = media?.idMal
+                val idString = if (malId != null && malId > 0) "mal-$malId" else "anilist-${schedule.id ?: schedule.media?.id ?: schedule.hashCode()}"
+
+                ScheduleItem(
+                    id = idString,
+                    title = title,
+                    time = formattedTime,
+                    episode = schedule.episode ?: 1,
+                    poster = poster
+                )
+            }?.distinctBy { it.id } ?: emptyList()
+
+            if (schedulesList.isNotEmpty()) {
+                emit(Result.Success(schedulesList))
+                return@flow
+            }
+        } catch (t: Throwable) {
+            if (t is kotlinx.coroutines.CancellationException) throw t
+            // Fall back to subsequent layers if AniList query fails
+        }
+
+        val realDate = getRealWorldDateStr(date)
+        
+        // 2. Fetch from remote proxy (preferred since it has correct active schedule episode numbers!)
+        try {
+            val response = apiService.getSchedules(realDate)
+            if (response.success) {
+                val list = response.data.scheduledAnimes?.map { it.toDomain() }?.distinctBy { it.id } ?: emptyList()
+                if (list.isNotEmpty()) {
+                    emit(Result.Success(list))
+                    return@flow
+                }
+            }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            // Fall back
+        }
+
+        // 3. Fallback to Jikan API directly
         try {
             val dayOfWeek = try {
                 val cal = java.util.Calendar.getInstance()
@@ -404,32 +751,19 @@ class AnimeRepositoryImpl @Inject constructor(
                     id = idString,
                     title = name,
                     time = time,
-                    episode = 1,
+                    episode = calculateAiringEpisode(anime.aired?.from, anime.episodes),
                     poster = poster
                 )
             }?.distinctBy { it.id } ?: emptyList()
             
             if (schedulesList.isNotEmpty()) {
                 emit(Result.Success(schedulesList))
-                return@flow
-            }
-        } catch (t: Throwable) {
-            if (t is kotlinx.coroutines.CancellationException) throw t
-            // Fall back if Jikan is rate-limited or fails
-        }
-
-        // 2. Fallback to remote proxy
-        try {
-            val response = apiService.getSchedules(date)
-            if (response.success) {
-                val list = response.data.scheduledAnimes?.map { it.toDomain() }?.distinctBy { it.id } ?: emptyList()
-                emit(Result.Success(list))
             } else {
                 emit(Result.Error("Schedule load failed"))
             }
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            emit(Result.Error(e.localizedMessage ?: "Schedule request failed"))
+        } catch (t: Throwable) {
+            if (t is kotlinx.coroutines.CancellationException) throw t
+            emit(Result.Error(t.localizedMessage ?: "Schedule request failed"))
         }
     }
 
@@ -762,6 +1096,10 @@ private data class JikanSearchRes(
     val data: List<JikanAnime>?
 )
 
+private data class JikanAired(
+    val from: String? = null
+)
+
 private data class JikanAnime(
     val mal_id: Int?,
     val title: String?,
@@ -771,7 +1109,8 @@ private data class JikanAnime(
     val type: String? = null,
     val duration: String? = null,
     val episodes: Int? = null,
-    val score: Double? = null
+    val score: Double? = null,
+    val aired: JikanAired? = null
 )
 
 private data class JikanImages(
@@ -786,4 +1125,58 @@ private data class JikanImagesStyle(
 
 private data class JikanBroadcast(
     val time: String?
+)
+
+private data class AniListGraphQLResponse(
+    val data: AniListData?
+)
+
+private data class AniListData(
+    val Page: AniPage?
+)
+
+private data class AniPage(
+    val airingSchedules: List<AniAiringSchedule>?
+)
+
+private data class AniAiringSchedule(
+    val id: Int?,
+    val episode: Int?,
+    val airingAt: Long?,
+    val media: AniMedia?
+)
+
+private data class AniMedia(
+    val id: Int?,
+    val idMal: Int?,
+    val title: AniTitle?,
+    val coverImage: AniCoverImage?
+)
+
+private data class AniTitle(
+    val english: String?,
+    val romaji: String?,
+    val userPreferred: String?
+)
+
+private data class AniCoverImage(
+    val extraLarge: String?,
+    val large: String?
+)
+
+private data class JikanEpisodesResponse(
+    val data: List<JikanEpisodeItem>?,
+    val pagination: JikanPagination?
+)
+
+private data class JikanEpisodeItem(
+    val mal_id: Int?,
+    val title: String?,
+    val filler: Boolean?,
+    val recap: Boolean?
+)
+
+private data class JikanPagination(
+    val last_visible_page: Int?,
+    val has_next_page: Boolean?
 )

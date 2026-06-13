@@ -177,6 +177,75 @@ fun ScheduleItemCard(
         }
     }
 
+    val localTimeText = remember(targetMillis, item.time) {
+        if (targetMillis != null) {
+            try {
+                val date = java.util.Date(targetMillis)
+                val sdfLocal = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).apply {
+                    timeZone = java.util.TimeZone.getDefault()
+                }
+                sdfLocal.format(date)
+            } catch (e: Exception) {
+                item.time
+            }
+        } else {
+            item.time
+        }
+    }
+
+    val localTimeZoneAbbr = remember(targetMillis) {
+        try {
+            val tz = java.util.TimeZone.getDefault()
+            val isDst = tz.inDaylightTime(java.util.Date(targetMillis ?: System.currentTimeMillis()))
+            tz.getDisplayName(isDst, java.util.TimeZone.SHORT, java.util.Locale.getDefault())
+        } catch (e: Exception) {
+            "Local"
+        }
+    }
+
+    val dayOffset = remember(targetMillis, selectedDate) {
+        if (targetMillis != null) {
+            try {
+                val sdfDate = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply {
+                    timeZone = java.util.TimeZone.getTimeZone("UTC")
+                }
+                val selectedDateParsed = sdfDate.parse(selectedDate)
+                if (selectedDateParsed != null) {
+                    val calUTC = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
+                        time = selectedDateParsed
+                    }
+                    val calLocal = java.util.Calendar.getInstance(java.util.TimeZone.getDefault()).apply {
+                        timeInMillis = targetMillis
+                    }
+                    
+                    val calUtcNormalized = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
+                        set(calUTC.get(java.util.Calendar.YEAR), calUTC.get(java.util.Calendar.MONTH), calUTC.get(java.util.Calendar.DAY_OF_MONTH), 0, 0, 0)
+                        set(java.util.Calendar.MILLISECOND, 0)
+                    }
+                    val calLocalNormalized = java.util.Calendar.getInstance(java.util.TimeZone.getDefault()).apply {
+                        set(calLocal.get(java.util.Calendar.YEAR), calLocal.get(java.util.Calendar.MONTH), calLocal.get(java.util.Calendar.DAY_OF_MONTH), 0, 0, 0)
+                        set(java.util.Calendar.MILLISECOND, 0)
+                    }
+                    
+                    val diffMs = calLocalNormalized.timeInMillis - calUtcNormalized.timeInMillis
+                    val diffDays = Math.round(diffMs.toDouble() / (24 * 60 * 60 * 1000)).toInt()
+                    
+                    when {
+                        diffDays > 0 -> "+${diffDays}d"
+                        diffDays < 0 -> "${diffDays}d"
+                        else -> ""
+                    }
+                } else {
+                    ""
+                }
+            } catch (e: Exception) {
+                ""
+            }
+        } else {
+            ""
+        }
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -210,25 +279,38 @@ fun ScheduleItemCard(
 
             // Airing Time Column
             Column(
-                modifier = Modifier.width(64.dp),
+                modifier = Modifier.width(76.dp),
                 horizontalAlignment = Alignment.Start
             ) {
-                Text(
-                    text = item.time,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = localTimeText,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                    if (dayOffset.isNotEmpty()) {
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text(
+                            text = dayOffset,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = CrunchyrollOrange
+                        )
+                    }
+                }
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = "UTC",
+                    text = localTimeZoneAbbr,
                     fontSize = 10.sp,
                     color = TextMuted,
                     fontWeight = FontWeight.SemiBold
                 )
             }
 
-            Spacer(modifier = Modifier.width(16.dp))
+            Spacer(modifier = Modifier.width(12.dp))
 
             // Info Column
             Column(
@@ -242,18 +324,20 @@ fun ScheduleItemCard(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(modifier = Modifier.height(4.dp))
-                Surface(
-                    color = SurfaceDarkVariant,
-                    shape = RoundedCornerShape(4.dp)
-                ) {
-                    Text(
-                        text = "Episode ${item.episode}",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = CrunchyrollOrange,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
+                if (item.episode > 0) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Surface(
+                        color = SurfaceDarkVariant,
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Text(
+                            text = "Episode ${item.episode}",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = CrunchyrollOrange,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
                 }
             }
 
