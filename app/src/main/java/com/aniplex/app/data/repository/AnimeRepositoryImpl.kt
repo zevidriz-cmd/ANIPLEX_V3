@@ -27,7 +27,8 @@ class AnimeRepositoryImpl @Inject constructor(
     private val cacheDao: CacheDao,
     private val gson: Gson,
     private val okHttpClient: okhttp3.OkHttpClient,
-    private val preferenceManager: PreferenceManager
+    private val preferenceManager: PreferenceManager,
+    private val apiSkipApiService: com.aniplex.app.data.remote.api.AniSkipApiService
 ) : AnimeRepository {
 
     private val HOME_CACHE_LIFETIME = 10 * 60 * 1000L // 10 minutes
@@ -1085,6 +1086,84 @@ class AnimeRepositoryImpl @Inject constructor(
         } catch (e: Exception) {
             null
         }
+    }
+
+    override fun getSkipTimes(animeId: Int, episodeNumber: Int, episodeLength: Double?): Flow<Result<SkipTimes>> = flow {
+        emit(Result.Loading)
+        val cacheKey = "aniskip_${animeId}_$episodeNumber"
+        val cachedEntity = cacheDao.getCache(cacheKey)
+        val currentTime = System.currentTimeMillis()
+        val ONE_DAY = 24 * 60 * 60 * 1000L
+
+        if (cachedEntity != null && (currentTime - cachedEntity.timestamp < ONE_DAY)) {
+            try {
+                val cachedResponse = gson.fromJson(cachedEntity.jsonContent, com.aniplex.app.data.remote.dto.AniSkipResponse::class.java)
+                emit(Result.Success(mapAniSkipResponseToDomain(cachedResponse)))
+                return@flow
+            } catch (e: Exception) {
+                // Ignore and fetch from web
+            }
+        }
+
+        try {
+            val lengthQuery = episodeLength?.toInt() ?: 0
+            val response = apiSkipApiService.getSkipTimes(
+                animeId = animeId,
+                episodeNumber = episodeNumber,
+                episodeLength = lengthQuery
+            )
+            if (response != null && response.found && response.results != null) {
+                cacheDao.insertCache(
+                    CacheEntity(
+                        cacheKey = cacheKey,
+                        jsonContent = gson.toJson(response),
+                        timestamp = currentTime
+                    )
+                )
+                emit(Result.Success(mapAniSkipResponseToDomain(response)))
+            } else {
+                emit(Result.Success(SkipTimes()))
+            }
+        } catch (e: Exception) {
+            if (cachedEntity != null) {
+                try {
+                    val cachedResponse = gson.fromJson(cachedEntity.jsonContent, com.aniplex.app.data.remote.dto.AniSkipResponse::class.java)
+                    emit(Result.Success(mapAniSkipResponseToDomain(cachedResponse)))
+                } catch (jsonEx: Exception) {
+                    emit(Result.Error("Failed to fetch skip times: ${e.localizedMessage}"))
+                }
+            } else {
+                emit(Result.Success(SkipTimes()))
+            }
+        }
+    }.flowOn(Dispatchers.IO)
+
+    private fun mapAniSkipResponseToDomain(response: com.aniplex.app.data.remote.dto.AniSkipResponse): SkipTimes {
+        var introStart = -1L
+        var introEnd = -1L
+        var outroStart = -1L
+        var outroEnd = -1L
+
+        response.results?.forEach { result ->
+            val startMs = (result.interval.startTime * 1000).toLong()
+            val endMs = (result.interval.endTime * 1000).toLong()
+            when (result.skipType) {
+                "op" -> {
+                    introStart = startMs
+                    introEnd = endMs
+                }
+                "ed" -> {
+                    outroStart = startMs
+                    outroEnd = endMs
+                }
+            }
+        }
+        return SkipTimes(
+            introStart = introStart,
+            introEnd = introEnd,
+            outroStart = outroStart,
+            outroEnd = outroEnd
+        )
     }
 }
 

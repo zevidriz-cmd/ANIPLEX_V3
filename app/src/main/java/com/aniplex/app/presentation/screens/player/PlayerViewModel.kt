@@ -7,6 +7,7 @@ import com.aniplex.app.data.local.preferences.ProfileManager
 import com.aniplex.app.domain.model.AnimeDetail
 import com.aniplex.app.domain.model.Episode
 import com.aniplex.app.domain.model.EpisodeStream
+import com.aniplex.app.domain.model.SkipTimes
 import com.aniplex.app.domain.model.Result
 import com.aniplex.app.domain.repository.AnimeRepository
 import com.google.firebase.auth.FirebaseAuth
@@ -189,6 +190,20 @@ class PlayerViewModel @Inject constructor(
     private val _currentEpisode = MutableStateFlow<Episode?>(null)
     val currentEpisode: StateFlow<Episode?> = _currentEpisode.asStateFlow()
 
+    private val _skipTimes = MutableStateFlow<SkipTimes>(SkipTimes())
+    val skipTimes: StateFlow<SkipTimes> = _skipTimes.asStateFlow()
+
+    private fun fetchSkipTimes(malIdStr: String, episodeNumber: Int) {
+        val malId = malIdStr.toIntOrNull() ?: return
+        viewModelScope.launch {
+            repository.getSkipTimes(malId, episodeNumber).collect { result ->
+                if (result is Result.Success) {
+                    _skipTimes.value = result.data
+                }
+            }
+        }
+    }
+
     private val _likeCount = MutableStateFlow(16800)
     val likeCount: StateFlow<Int> = _likeCount.asStateFlow()
     
@@ -206,6 +221,8 @@ class PlayerViewModel @Inject constructor(
 
     fun initialize(animeId: String, episodeId: String, category: String) {
         _uiState.value = PlayerUiState.Loading
+        _skipTimes.value = SkipTimes() // Reset skip times on load
+        _initialProgress.value = 0L // Reset initial progress too to avoid cross-anime progress leak
         
         viewModelScope.launch {
             // 1. Fetch Anime Detail (for poster image)
@@ -213,6 +230,12 @@ class PlayerViewModel @Inject constructor(
                 if (result is Result.Success) {
                     posterUrl = result.data.poster
                     _animeDetail.value = result.data
+                    
+                    val epNum = _currentEpisode.value?.number
+                    val mId = result.data.malId
+                    if (epNum != null && mId.isNotEmpty()) {
+                        fetchSkipTimes(mId, epNum)
+                    }
                 }
             }
         }
@@ -222,7 +245,13 @@ class PlayerViewModel @Inject constructor(
             repository.getEpisodes(animeId, false).collect { result ->
                 if (result is Result.Success) {
                     _episodes.value = result.data
-                    _currentEpisode.value = result.data.find { it.id == episodeId }
+                    val ep = result.data.find { it.id == episodeId }
+                    _currentEpisode.value = ep
+                    
+                    val mId = _animeDetail.value?.malId
+                    if (ep != null && mId != null && mId.isNotEmpty()) {
+                        fetchSkipTimes(mId, ep.number)
+                    }
                 }
             }
         }

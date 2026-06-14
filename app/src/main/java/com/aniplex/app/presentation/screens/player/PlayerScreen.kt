@@ -31,6 +31,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.input.pointer.PointerInputChange
@@ -80,6 +81,7 @@ import android.util.LruCache
 import androidx.compose.ui.graphics.asImageBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
 import com.aniplex.app.data.download.DownloadManager
 import com.aniplex.app.data.download.DownloadStatus
 import com.aniplex.app.theme.CrunchyrollOrange
@@ -104,6 +106,7 @@ import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.compose.material.ripple.rememberRipple
 import com.aniplex.app.domain.model.Episode
 import com.aniplex.app.domain.model.AnimeDetail
+import com.aniplex.app.domain.model.SkipTimes
 
 private val sharedOkHttpClient = OkHttpClient.Builder()
     .connectTimeout(5, TimeUnit.SECONDS)
@@ -115,6 +118,7 @@ private val sharedOkHttpClient = OkHttpClient.Builder()
 @Stable
 data class PlayerScreenState(
     val isLandscape: Boolean,
+    val skipTimes: SkipTimes,
     val showSettings: Boolean,
     val episodes: List<Episode>,
     val uiState: PlayerUiState,
@@ -236,6 +240,7 @@ fun PlayerScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val animeDetail by viewModel.animeDetail.collectAsStateWithLifecycle()
     val currentEpisode by viewModel.currentEpisode.collectAsStateWithLifecycle()
+    val skipTimes by viewModel.skipTimes.collectAsStateWithLifecycle()
     
     val likeCount by viewModel.likeCount.collectAsStateWithLifecycle()
     val isLiked by viewModel.isLiked.collectAsStateWithLifecycle()
@@ -738,7 +743,7 @@ fun PlayerScreen(
             if (!hasSeekedToInitialProgress && localResumePlayback && initialProgress > 0L) {
                 exoPlayer.seekTo(initialProgress)
                 hasSeekedToInitialProgress = true
-                Log.d("ANIPLEX_PLAYER", "Successfully seeked inside stream LaunchedEffect: $initialProgress")
+                Log.d("ANIPLEX_PLAYER", "Successfully seeked inside stream LaunchedEffect to saved progress: $initialProgress")
             }
 
             exoPlayer.prepare()
@@ -753,7 +758,7 @@ fun PlayerScreen(
             if (player != null) {
                 player.seekTo(initialProgress)
                 hasSeekedToInitialProgress = true
-                Log.d("ANIPLEX_PLAYER", "Successfully seeked to async progress: $initialProgress")
+                Log.d("ANIPLEX_PLAYER", "Successfully seeked to async saved progress: $initialProgress")
             }
         }
     }
@@ -791,7 +796,7 @@ fun PlayerScreen(
         player.trackSelectionParameters = builder.build()
     }
 
-    LaunchedEffect(exoPlayer) {
+    LaunchedEffect(exoPlayer, skipTimes) {
         val player = exoPlayer ?: return@LaunchedEffect
         while (true) {
             delay(500)
@@ -799,6 +804,8 @@ fun PlayerScreen(
             if (player.duration > 0L) {
                 durationMs = player.duration
             }
+            
+            // Auto skipping is disabled per user request so videos always start at 0:00 and manual skip buttons can be clicked instead.
             
             val now = System.currentTimeMillis()
             if (now - lastSavedProgressTime >= 30000L && player.isPlaying) {
@@ -878,6 +885,7 @@ fun PlayerScreen(
 
     val state = PlayerScreenState(
         isLandscape = isLandscape,
+        skipTimes = skipTimes,
         showSettings = showSettings,
         episodes = episodes,
         uiState = effectiveUiState,
@@ -1551,95 +1559,77 @@ fun ExoVideoPlayer(
                         val edgeThresholdPx = 50.dp.toPx()
                         var dragStartValue = 0f
                         var isLeftHalf = false
+                        var isDragActiveByAgent = false
+                        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                        val maxVolume = audioManager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC)?.coerceAtLeast(1) ?: 15
 
-                        awaitPointerEventScope {
-                            while (true) {
-                                val down = awaitFirstDown(requireUnconsumed = false)
+                        detectVerticalDragGestures(
+                            onDragStart = { offset ->
                                 val screenWidth = size.width
                                 val screenHeight = size.height
-                                val startX = down.position.x
-                                val startY = down.position.y
+                                val startX = offset.x
+                                val startY = offset.y
 
                                 // Completely ignore touches starting near the screen edges
-                                // so they are allowed to propagate to system/back gestures
                                 if (startX < edgeThresholdPx || startX > screenWidth - edgeThresholdPx ||
                                     startY < edgeThresholdPx || startY > screenHeight - edgeThresholdPx) {
-                                    do {
-                                        val event = awaitPointerEvent()
-                                    } while (event.changes.any { it.pressed })
-                                    continue
+                                    isDragActiveByAgent = false
+                                    return@detectVerticalDragGestures
                                 }
 
+                                isDragActiveByAgent = true
                                 val halfWidth = screenWidth / 2f
                                 isLeftHalf = startX < halfWidth
-
-                                val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-                                val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
 
                                 if (isLeftHalf) {
                                     val lp = activity?.window?.attributes
                                     val currentBrightness = lp?.screenBrightness ?: -1f
                                     dragStartValue = if (currentBrightness < 0) 0.5f else currentBrightness
                                 } else {
-                                    val currentVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                                    val currentVol = audioManager?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: 0
                                     dragStartValue = currentVol.toFloat() / maxVolume.toFloat()
                                 }
 
-                                var currentPointerId = down.id
-                                var hasTriggeredDrag = false
+                                callbacks.onGestureChanged(
+                                    if (isLeftHalf) "brightness" else "volume",
+                                    dragStartValue,
+                                    true
+                                )
+                            },
+                            onDragEnd = {
+                                isDragActiveByAgent = false
+                                callbacks.onGestureChanged(null, 0f, false)
+                            },
+                            onDragCancel = {
+                                isDragActiveByAgent = false
+                                callbacks.onGestureChanged(null, 0f, false)
+                            },
+                            onVerticalDrag = { change, dragAmountY ->
+                                if (!isDragActiveByAgent) return@detectVerticalDragGestures
 
-                                while (true) {
-                                    val event = awaitPointerEvent()
-                                    val change = event.changes.firstOrNull { it.id == currentPointerId }
-                                    if (change == null || change.isConsumed) {
-                                        break
+                                val screenHeight = size.height
+                                val delta = -dragAmountY / screenHeight.toFloat()
+
+                                change.consume()
+
+                                if (isLeftHalf) {
+                                    val newBrightness = (dragStartValue + delta).coerceIn(0.01f, 1f)
+                                    dragStartValue = newBrightness
+                                    activity?.runOnUiThread {
+                                        val lp = activity.window.attributes
+                                        lp.screenBrightness = newBrightness
+                                        activity.window.attributes = lp
                                     }
-                                    if (change.changedToUp()) {
-                                        break
-                                    }
-
-                                    val currentX = change.position.x
-                                    val currentY = change.position.y
-
-                                    val dragAmountY = change.position.y - change.previousPosition.y
-                                    val dragAmountX = change.position.x - change.previousPosition.x
-
-                                    if (!hasTriggeredDrag) {
-                                        val diffY = kotlin.math.abs(currentY - startY)
-                                        val diffX = kotlin.math.abs(currentX - startX)
-                                        if (diffY > 15 && diffY > diffX) {
-                                            hasTriggeredDrag = true
-                                            callbacks.onGestureChanged(
-                                                if (isLeftHalf) "brightness" else "volume",
-                                                dragStartValue,
-                                                true
-                                            )
-                                        }
-                                    }
-
-                                    if (hasTriggeredDrag) {
-                                        change.consume()
-                                        val delta = -dragAmountY / screenHeight.toFloat()
-                                        if (isLeftHalf) {
-                                            val newBrightness = (dragStartValue + delta).coerceIn(0.01f, 1f)
-                                            dragStartValue = newBrightness
-                                            activity?.runOnUiThread {
-                                                val lp = activity.window.attributes
-                                                lp.screenBrightness = newBrightness
-                                                activity.window.attributes = lp
-                                            }
-                                            callbacks.onGestureChanged("brightness", newBrightness, true)
-                                        } else {
-                                            val newVolumeFraction = (dragStartValue + delta).coerceIn(0f, 1f)
-                                            dragStartValue = newVolumeFraction
-                                            val targetVolume = (newVolumeFraction * maxVolume).toInt()
-                                            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVolume, 0)
-                                            callbacks.onGestureChanged("volume", newVolumeFraction, true)
-                                        }
-                                    }
+                                    callbacks.onGestureChanged("brightness", newBrightness, true)
+                                } else {
+                                    val newVolumeFraction = (dragStartValue + delta).coerceIn(0f, 1f)
+                                    dragStartValue = newVolumeFraction
+                                    val targetVolume = (newVolumeFraction * maxVolume).toInt()
+                                    audioManager?.setStreamVolume(AudioManager.STREAM_MUSIC, targetVolume, 0)
+                                    callbacks.onGestureChanged("volume", newVolumeFraction, true)
                                 }
                             }
-                        }
+                        )
                     }
             )
 
@@ -1915,24 +1905,29 @@ fun ExoVideoPlayer(
                                 .padding(horizontal = 16.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            val displayPositionMs = scrubbingPositionMs ?: state.currentPositionMs
+
                             Text(
-                                text = formatTime(state.currentPositionMs),
+                                text = formatTime(displayPositionMs),
                                 color = Color.White,
                                 fontSize = 12.sp
                             )
 
                             Slider(
-                                value = if (state.durationMs > 0) (state.currentPositionMs.toFloat() / state.durationMs.toFloat()) else 0f,
+                                value = if (state.durationMs > 0) (displayPositionMs.toFloat() / state.durationMs.toFloat()) else 0f,
                                 onValueChange = { fraction ->
-                                    if (exoPlayer != null) {
+                                    if (state.durationMs > 0) {
                                         callbacks.onControlsInteraction()
                                         val targetPos = (fraction * state.durationMs).toLong()
-                                        exoPlayer.seekTo(targetPos)
-                                        callbacks.onPositionChanged(targetPos)
                                         scrubbingPositionMs = targetPos
                                     }
                                 },
                                 onValueChangeFinished = {
+                                    val finalPos = scrubbingPositionMs
+                                    if (finalPos != null && exoPlayer != null) {
+                                        exoPlayer.seekTo(finalPos)
+                                        callbacks.onPositionChanged(finalPos)
+                                    }
                                     scrubbingPositionMs = null
                                 },
                                 colors = SliderDefaults.colors(
@@ -2002,6 +1997,47 @@ fun ExoVideoPlayer(
                     }
                 }
             }
+            
+            // Skip Intro / Skip Outro Floating Button Overlay
+            val hasIntroNow = state.skipTimes.isDuringIntro(state.currentPositionMs)
+            val hasOutroNow = state.skipTimes.isDuringOutro(state.currentPositionMs)
+            
+            if (hasIntroNow || hasOutroNow) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(bottom = 96.dp, end = 24.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            if (exoPlayer != null) {
+                                val targetPos = if (hasIntroNow) state.skipTimes.introEnd else state.skipTimes.outroEnd
+                                exoPlayer.seekTo(targetPos)
+                                callbacks.onPositionChanged(targetPos)
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = CrunchyrollOrange,
+                            contentColor = Color.White
+                        ),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.height(44.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.FastForward,
+                            contentDescription = "Skip Scene",
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (hasIntroNow) "Skip Intro" else "Skip Outro",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -2022,42 +2058,56 @@ fun ScrubbingThumbnail(
     fallbackImageUrl: String?,
     modifier: Modifier = Modifier
 ) {
-    var thumbnailBitmap by remember(videoUrl, positionMs) { mutableStateOf<Bitmap?>(null) }
-    var isLoading by remember { mutableStateOf(false) }
-
     // Keep a cache of already loaded bitmaps to make dragging extremely smooth and efficient
     val bitmapCache = remember { LruCache<Long, Bitmap>(100) }
 
-    // Use a single MediaMetadataRetriever per videoUrl
-    val retriever = remember(videoUrl) {
+    // Round position to nearest 1000ms (1 second) to maximize cache hits
+    val roundedPositionS = positionMs / 1000
+
+    var thumbnailBitmap by remember(videoUrl, positionMs) { 
+        mutableStateOf<Bitmap?>(bitmapCache.get(roundedPositionS)) 
+    }
+    var isLoading by remember { mutableStateOf(false) }
+
+    val scope = rememberCoroutineScope()
+    var retriever by remember(videoUrl) { mutableStateOf<MediaMetadataRetriever?>(null) }
+
+    LaunchedEffect(videoUrl) {
         if (!videoUrl.isNullOrEmpty()) {
-            try {
-                MediaMetadataRetriever().apply {
-                    setDataSource(videoUrl, HashMap<String, String>())
+            withContext(Dispatchers.IO) {
+                try {
+                    val r = MediaMetadataRetriever().apply {
+                        setDataSource(videoUrl, HashMap<String, String>())
+                    }
+                    withContext(Dispatchers.Main) {
+                        retriever = r
+                    }
+                } catch (e: Exception) {
+                    // Ignore
                 }
-            } catch (e: Exception) {
-                null
             }
         } else {
-            null
+            retriever = null
         }
     }
 
     DisposableEffect(retriever) {
         onDispose {
-            try {
-                retriever?.release()
-            } catch (e: Exception) {
-                // Ignore
+            val r = retriever
+            if (r != null) {
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        r.release()
+                    } catch (e: Exception) {
+                        // Ignore
+                    }
+                }
             }
         }
     }
 
-    // Round position to nearest 1000ms (1 second) to maximize cache hits
-    val roundedPositionS = positionMs / 1000
-
     LaunchedEffect(videoUrl, roundedPositionS, retriever) {
-        if (retriever == null) return@LaunchedEffect
+        val currentRetriever = retriever ?: return@LaunchedEffect
 
         val cached = bitmapCache.get(roundedPositionS)
         if (cached != null) {
@@ -2072,7 +2122,7 @@ fun ScrubbingThumbnail(
         withContext(Dispatchers.IO) {
             try {
                 val timeUs = roundedPositionS * 1000 * 1000
-                val frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                val frame = currentRetriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
                 if (frame != null) {
                     val scaled = Bitmap.createScaledBitmap(frame, 240, 135, true)
                     bitmapCache.put(roundedPositionS, scaled)

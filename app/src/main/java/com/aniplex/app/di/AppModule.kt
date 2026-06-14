@@ -72,6 +72,17 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun provideAniSkipApiService(okHttpClient: OkHttpClient): com.aniplex.app.data.remote.api.AniSkipApiService {
+        return Retrofit.Builder()
+            .baseUrl("https://api.aniskip.com/")
+            .client(okHttpClient)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+            .create(com.aniplex.app.data.remote.api.AniSkipApiService::class.java)
+    }
+
+    @Provides
+    @Singleton
     fun provideAppDatabase(@ApplicationContext context: Context): AppDatabase {
         return Room.databaseBuilder(
             context,
@@ -100,9 +111,10 @@ object AppModule {
         cacheDao: CacheDao,
         gson: Gson,
         okHttpClient: OkHttpClient,
-        preferenceManager: PreferenceManager
+        preferenceManager: PreferenceManager,
+        aniSkipApiService: com.aniplex.app.data.remote.api.AniSkipApiService
     ): AnimeRepository {
-        return AnimeRepositoryImpl(apiService, cacheDao, gson, okHttpClient, preferenceManager)
+        return AnimeRepositoryImpl(apiService, cacheDao, gson, okHttpClient, preferenceManager, aniSkipApiService)
     }
 
     @Provides

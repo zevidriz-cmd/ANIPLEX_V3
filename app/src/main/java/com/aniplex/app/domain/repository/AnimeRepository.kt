@@ -26,4 +26,5 @@ interface AnimeRepository {
     fun getSeasons(malId: String, forceRefresh: Boolean = false): Flow<Result<List<Season>>>
     fun resolveMAL(malId: String): Flow<Result<String>>
     suspend fun getCachedAnimeDetail(id: String): AnimeDetail?
+    fun getSkipTimes(animeId: Int, episodeNumber: Int, episodeLength: Double? = null): Flow<Result<SkipTimes>>
 }
