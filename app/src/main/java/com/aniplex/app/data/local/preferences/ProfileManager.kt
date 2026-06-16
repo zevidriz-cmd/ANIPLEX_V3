@@ -45,7 +45,9 @@ class ProfileManager @Inject constructor(
                     val name = doc.getString("name") ?: ""
                     val avatarUrl = doc.getString("avatarUrl") ?: ""
                     val pin = doc.getString("pin")
-                    _activeProfile.value = UserProfile(profileId, name, avatarUrl, pin)
+                    val recoveryQuestion = doc.getString("recoveryQuestion")
+                    val recoveryAnswer = doc.getString("recoveryAnswer")
+                    _activeProfile.value = UserProfile(profileId, name, avatarUrl, pin, recoveryQuestion, recoveryAnswer)
                 }
             }
     }
@@ -76,14 +78,16 @@ class ProfileManager @Inject constructor(
                 val name = doc.getString("name") ?: ""
                 val avatarUrl = doc.getString("avatarUrl") ?: ""
                 val pin = doc.getString("pin")
-                UserProfile(id, name, avatarUrl, pin)
+                val recoveryQuestion = doc.getString("recoveryQuestion")
+                val recoveryAnswer = doc.getString("recoveryAnswer")
+                UserProfile(id, name, avatarUrl, pin, recoveryQuestion, recoveryAnswer)
             }
         } catch (e: Exception) {
             emptyList()
         }
     }
 
-    suspend fun createProfile(userId: String, name: String, avatarUrl: String, rawPin: String?): Result<UserProfile> {
+    suspend fun createProfile(userId: String, name: String, avatarUrl: String, rawPin: String?, recoveryQuestion: String?, recoveryAnswer: String?): Result<UserProfile> {
         return try {
             val profiles = getProfiles(userId)
             if (profiles.size >= 4) {
@@ -96,7 +100,9 @@ class ProfileManager @Inject constructor(
                 "id" to id,
                 "name" to name,
                 "avatarUrl" to avatarUrl,
-                "pin" to hashedPin
+                "pin" to hashedPin,
+                "recoveryQuestion" to if (hashedPin != null) recoveryQuestion else null,
+                "recoveryAnswer" to if (hashedPin != null) recoveryAnswer else null
             )
 
             firestore.collection("users").document(userId)
@@ -104,30 +110,51 @@ class ProfileManager @Inject constructor(
                 .set(profileMap)
                 .await()
 
-            Result.success(UserProfile(id, name, avatarUrl, hashedPin))
+            Result.success(UserProfile(id, name, avatarUrl, hashedPin, recoveryQuestion, recoveryAnswer))
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
 
-    suspend fun updateProfile(userId: String, profileId: String, name: String, avatarUrl: String, rawPin: String?): Result<Unit> {
+    suspend fun updateProfile(userId: String, profileId: String, name: String, avatarUrl: String, rawPin: String?, recoveryQuestion: String?, recoveryAnswer: String?): Result<Unit> {
         return try {
+            val currentDoc = firestore.collection("users").document(userId)
+                .collection("profiles").document(profileId).get().await()
+
+            val existingPin = currentDoc.getString("pin")
+            val existingQuestion = currentDoc.getString("recoveryQuestion")
+            val existingAnswer = currentDoc.getString("recoveryAnswer")
+
             val hashedPin = if (rawPin == "REMOVE") {
                 null
             } else if (!rawPin.isNullOrBlank()) {
                 hashPin(rawPin)
             } else {
-                // keep current pin, but wait, if rawPin is empty we might keep the old PIN or null.
-                // To support keeping existing PIN, let's fetch current profile first.
-                val current = firestore.collection("users").document(userId)
-                    .collection("profiles").document(profileId).get().await()
-                current.getString("pin")
+                existingPin
+            }
+
+            val finalQuestion = if (rawPin == "REMOVE") {
+                null
+            } else if (!rawPin.isNullOrBlank()) {
+                recoveryQuestion
+            } else {
+                existingQuestion
+            }
+
+            val finalAnswer = if (rawPin == "REMOVE") {
+                null
+            } else if (!rawPin.isNullOrBlank()) {
+                recoveryAnswer
+            } else {
+                existingAnswer
             }
 
             val profileMap = hashMapOf(
                 "name" to name,
                 "avatarUrl" to avatarUrl,
-                "pin" to hashedPin
+                "pin" to hashedPin,
+                "recoveryQuestion" to finalQuestion,
+                "recoveryAnswer" to finalAnswer
             )
 
             firestore.collection("users").document(userId)
@@ -137,7 +164,7 @@ class ProfileManager @Inject constructor(
 
             // If this was the active profile, update activeProfile StateFlow
             if (_activeProfile.value?.id == profileId) {
-                _activeProfile.value = UserProfile(profileId, name, avatarUrl, hashedPin)
+                _activeProfile.value = UserProfile(profileId, name, avatarUrl, hashedPin, finalQuestion, finalAnswer)
             }
 
             Result.success(Unit)

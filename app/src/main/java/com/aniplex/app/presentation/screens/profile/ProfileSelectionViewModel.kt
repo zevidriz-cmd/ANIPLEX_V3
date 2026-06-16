@@ -62,11 +62,11 @@ class ProfileSelectionViewModel @Inject constructor(
         onSuccess()
     }
 
-    fun createProfile(name: String, avatarUrl: String, pin: String?, onComplete: (Result<UserProfile>) -> Unit) {
+    fun createProfile(name: String, avatarUrl: String, pin: String?, recoveryQuestion: String?, recoveryAnswer: String?, onComplete: (Result<UserProfile>) -> Unit) {
         val userId = auth.currentUser?.uid ?: return
         _uiState.value = ProfileSelectionState.Loading
         viewModelScope.launch {
-            val result = profileManager.createProfile(userId, name, avatarUrl, pin)
+            val result = profileManager.createProfile(userId, name, avatarUrl, pin, recoveryQuestion, recoveryAnswer)
             result.onSuccess {
                 refreshProfiles(userId)
             }
@@ -74,15 +74,32 @@ class ProfileSelectionViewModel @Inject constructor(
         }
     }
 
-    fun updateProfile(id: String, name: String, avatarUrl: String, pin: String?, onComplete: (Result<Unit>) -> Unit) {
+    fun updateProfile(id: String, name: String, avatarUrl: String, pin: String?, recoveryQuestion: String?, recoveryAnswer: String?, onComplete: (Result<Unit>) -> Unit) {
         val userId = auth.currentUser?.uid ?: return
         _uiState.value = ProfileSelectionState.Loading
         viewModelScope.launch {
-            val result = profileManager.updateProfile(userId, id, name, avatarUrl, pin)
+            val result = profileManager.updateProfile(userId, id, name, avatarUrl, pin, recoveryQuestion, recoveryAnswer)
             result.onSuccess {
                 refreshProfiles(userId)
             }
             onComplete(result)
+        }
+    }
+
+    fun verifyAccountPassword(password: String, onResult: (Boolean) -> Unit) {
+        val email = auth.currentUser?.email
+        if (email.isNullOrBlank()) {
+            onResult(false)
+            return
+        }
+        viewModelScope.launch {
+            try {
+                auth.signInWithEmailAndPassword(email, password).addOnCompleteListener { task ->
+                    onResult(task.isSuccessful)
+                }
+            } catch (e: Exception) {
+                onResult(false)
+            }
         }
     }
 

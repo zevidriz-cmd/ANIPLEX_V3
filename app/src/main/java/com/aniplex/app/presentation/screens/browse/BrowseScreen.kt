@@ -95,10 +95,12 @@ fun BrowseScreen(
             containerColor = BackgroundVoid,
             contentColor = Color.White,
             indicator = { tabPositions ->
-                TabRowDefaults.SecondaryIndicator(
-                    Modifier.tabIndicatorOffset(tabPositions[pagerState.currentPage]),
-                    color = CrunchyrollOrange
-                )
+                if (pagerState.currentPage < tabPositions.size) {
+                    TabRowDefaults.SecondaryIndicator(
+                        Modifier.tabIndicatorOffset(tabPositions[pagerState.currentPage]),
+                        color = CrunchyrollOrange
+                    )
+                }
             },
             divider = {
                 HorizontalDivider(color = SurfaceDarkVariant, thickness = 1.dp)
@@ -159,7 +161,7 @@ fun BrowseScreen(
                             viewModel.onGenreChange(genreKey)
                             coroutineScope.launch {
                                 pagerState.animateScrollToPage(0)
-                            }
+                             }
                         }
                     )
                 }
@@ -427,3 +429,4 @@ fun BrowseErrorState(message: String, onRetry: () -> Unit) {
         }
     }
 }
+

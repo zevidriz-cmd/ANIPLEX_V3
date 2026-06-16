@@ -7,6 +7,7 @@ plugins {
   alias(libs.plugins.google.services)
   alias(libs.plugins.crashlytics)
   alias(libs.plugins.ksp)
+  alias(libs.plugins.secrets)
 }
 
 android {
@@ -129,4 +130,9 @@ dependencies {
 
   // Memory Leak Detection (Tooling)
   // debugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")
+}
+
+secrets {
+    propertiesFileName = ".env"
+    defaultPropertiesFileName = ".env.example"
 }

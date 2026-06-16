@@ -323,15 +323,35 @@ class PlayerViewModel @Inject constructor(
 
         viewModelScope.launch {
             try {
+                // Check if user is near the end of the episode (90% or higher, or last 2 minutes / 120 seconds)
+                val currentList = _episodes.value
+                val currentIndex = currentList.indexOfFirst { it.id == episodeId || it.number == episodeNumber }
+
+                var finalEpisodeId = episodeId
+                var finalEpisodeNumber = episodeNumber
+                var finalEpisodeTitle = episodeTitle
+                var finalProgress = progress
+                var finalDuration = duration
+
+                val isNearEnd = (duration > 0L) && (progress.toFloat() / duration.toFloat() >= 0.90f || (duration - progress) <= 120_000L)
+                if (isNearEnd && currentIndex != -1 && currentIndex < currentList.size - 1) {
+                    val nextEp = currentList[currentIndex + 1]
+                    finalEpisodeId = nextEp.id
+                    finalEpisodeNumber = nextEp.number
+                    finalEpisodeTitle = nextEp.title
+                    finalProgress = 0L
+                    finalDuration = 0L // clean resume state for the next episode
+                }
+
                 val data = hashMapOf(
                     "animeId" to animeId,
                     "animeTitle" to animeTitle,
                     "poster" to posterUrl,
-                    "episodeId" to episodeId,
-                    "episodeNumber" to episodeNumber,
-                    "episodeTitle" to episodeTitle,
-                    "progressPosition" to progress,
-                    "totalDuration" to duration,
+                    "episodeId" to finalEpisodeId,
+                    "episodeNumber" to finalEpisodeNumber,
+                    "episodeTitle" to finalEpisodeTitle,
+                    "progressPosition" to finalProgress,
+                    "totalDuration" to finalDuration,
                     "updatedAt" to System.currentTimeMillis()
                 )
                 val docRef = if (profileId != null) {

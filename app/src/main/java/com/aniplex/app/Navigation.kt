@@ -205,7 +205,7 @@ fun MainNavigation() {
 }
 
 enum class DashboardTab {
-    HOME, MY_LISTS, DOWNLOADS, BROWSE, ACCOUNT
+    HOME, MY_LISTS, BROWSE, ACCOUNT
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -376,10 +376,10 @@ fun DashboardShell(
                     )
                 )
                 NavigationBarItem(
-                    selected = selectedTab == DashboardTab.DOWNLOADS,
-                    onClick = { selectedTab = DashboardTab.DOWNLOADS },
-                    icon = { Icon(Icons.Default.Download, contentDescription = "Offline") },
-                    label = { Text("Offline", fontSize = 10.sp, fontWeight = FontWeight.Bold) },
+                    selected = selectedTab == DashboardTab.ACCOUNT,
+                    onClick = { selectedTab = DashboardTab.ACCOUNT },
+                    icon = { Icon(Icons.Default.Person, contentDescription = "Profile") },
+                    label = { Text("Profile", fontSize = 10.sp, fontWeight = FontWeight.Bold) },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = Color(0xFF13111E),
                         selectedTextColor = TextPrimary,
@@ -391,7 +391,7 @@ fun DashboardShell(
             }
         }
     ) { innerPadding ->
-        val topPadding = if (selectedTab == DashboardTab.HOME || selectedTab == DashboardTab.MY_LISTS || selectedTab == DashboardTab.DOWNLOADS) 0.dp else innerPadding.calculateTopPadding()
+        val topPadding = if (selectedTab == DashboardTab.HOME || selectedTab == DashboardTab.MY_LISTS) 0.dp else innerPadding.calculateTopPadding()
         val screenModifier = Modifier.padding(
             top = topPadding,
             bottom = innerPadding.calculateBottomPadding()
@@ -415,7 +415,6 @@ fun DashboardShell(
                 onBackClick = null,
                 modifier = screenModifier
             )
-            DashboardTab.DOWNLOADS -> DownloadsScreen(onPlayClick = onEpisodeClick, modifier = screenModifier)
             DashboardTab.BROWSE -> BrowseScreen(
                 onAnimeClick = onAnimeClick,
                 initialTab = browseInitialTab,

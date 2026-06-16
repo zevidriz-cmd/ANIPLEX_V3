@@ -168,7 +168,10 @@ data class PlayerScreenState(
     val showVersionDialog: Boolean,
     val preferredAnimeVersion: String,
     val metadataScrollState: ScrollState,
-    val settingsScrollState: ScrollState
+    val settingsScrollState: ScrollState,
+    val subtitleStyle: String,
+    val showSubtitleStyleDialog: Boolean,
+    val showEpisodesSelector: Boolean
 )
 
 data class PlayerCallbacks(
@@ -212,7 +215,11 @@ data class PlayerCallbacks(
     val onShowSpeedDialogChange: (Boolean) -> Unit,
     val onShowSubtitleSizeDialogChange: (Boolean) -> Unit,
     val onVersionChange: (String) -> Unit,
-    val onShowVersionDialogChange: (Boolean) -> Unit
+    val onShowVersionDialogChange: (Boolean) -> Unit,
+    val onSubtitleStyleChange: (String) -> Unit,
+    val onShowSubtitleStyleDialogChange: (Boolean) -> Unit,
+    val onShowEpisodesSelectorChange: (Boolean) -> Unit,
+    val onEpisodeSelect: (Episode) -> Unit
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -294,6 +301,9 @@ fun PlayerScreen(
     var showSubtitleSizeDialog by remember { mutableStateOf(false) }
     var showVersionDialog by remember { mutableStateOf(false) }
     var preferredAnimeVersion by remember { mutableStateOf(viewModel.preferredAnimeVersion) }
+    var subtitleStyle by remember { mutableStateOf("classic_outline") }
+    var showSubtitleStyleDialog by remember { mutableStateOf(false) }
+    var showEpisodesSelector by remember { mutableStateOf(false) }
 
     // Scroll states
     val metadataScrollState = rememberScrollState()
@@ -935,7 +945,10 @@ fun PlayerScreen(
         showVersionDialog = showVersionDialog,
         preferredAnimeVersion = preferredAnimeVersion,
         metadataScrollState = metadataScrollState,
-        settingsScrollState = settingsScrollState
+        settingsScrollState = settingsScrollState,
+        subtitleStyle = subtitleStyle,
+        showSubtitleStyleDialog = showSubtitleStyleDialog,
+        showEpisodesSelector = showEpisodesSelector
     )
 
     val callbacks = PlayerCallbacks(
@@ -1069,7 +1082,20 @@ fun PlayerScreen(
                 preferredAnimeVersion = viewModel.preferredAnimeVersion
             }
         },
-        onShowVersionDialogChange = { showVersionDialog = it }
+        onShowVersionDialogChange = { showVersionDialog = it },
+        onSubtitleStyleChange = { subtitleStyle = it },
+        onShowSubtitleStyleDialogChange = { showSubtitleStyleDialog = it },
+        onShowEpisodesSelectorChange = { showEpisodesSelector = it },
+        onEpisodeSelect = { clickedEp ->
+            val nextUrl = if (activeCategory.equals("dub", ignoreCase = true)) {
+                "https://animeplay.cfd/stream/s-2/${clickedEp.id}/dub"
+            } else {
+                "https://animeplay.cfd/stream/s-2/${clickedEp.id}"
+            }
+            localResumePlayback = false
+            resetPlayerState(nextUrl)
+            viewModel.initialize(animeId, clickedEp.id, activeCategory)
+        }
     )
 
     PlayerScreenContent(
@@ -1346,6 +1372,18 @@ private fun PlayerScreenContent(
                 callbacks = callbacks
             )
         }
+
+        AnimatedVisibility(
+            visible = state.showEpisodesSelector,
+            enter = slideInVertically(initialOffsetY = { it }),
+            exit = slideOutVertically(targetOffsetY = { it }),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            InPlayerEpisodeSelectorOverlay(
+                state = state,
+                callbacks = callbacks
+            )
+        }
     }
 }
 
@@ -1465,6 +1503,7 @@ fun ExoVideoPlayer(
     val activity = context as? Activity
     
     var scrubbingPositionMs by remember { mutableStateOf<Long?>(null) }
+    var showChaptersSelector by remember { mutableStateOf(false) }
     val exoPlayer = state.exoPlayerRef
 
     Box(
@@ -1512,19 +1551,97 @@ fun ExoVideoPlayer(
 
                         subtitleView?.visibility = android.view.View.VISIBLE
                         subtitleView?.apply {
-                            setStyle(androidx.media3.ui.CaptionStyleCompat(
-                                AndroidColor.WHITE,
-                                AndroidColor.TRANSPARENT,
-                                AndroidColor.TRANSPARENT,
-                                androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW,
-                                AndroidColor.BLACK,
-                                null
-                            ))
+                            val styleCompat = when (state.subtitleStyle) {
+                                "yellow" -> androidx.media3.ui.CaptionStyleCompat(
+                                    AndroidColor.YELLOW,
+                                    AndroidColor.TRANSPARENT,
+                                    AndroidColor.TRANSPARENT,
+                                    androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW,
+                                    AndroidColor.BLACK,
+                                    null
+                                )
+                                "cyan" -> androidx.media3.ui.CaptionStyleCompat(
+                                    AndroidColor.CYAN,
+                                    AndroidColor.TRANSPARENT,
+                                    AndroidColor.TRANSPARENT,
+                                    androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_OUTLINE,
+                                    AndroidColor.BLACK,
+                                    null
+                                )
+                                "classic_outline" -> androidx.media3.ui.CaptionStyleCompat(
+                                    AndroidColor.WHITE,
+                                    AndroidColor.TRANSPARENT,
+                                    AndroidColor.TRANSPARENT,
+                                    androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_OUTLINE,
+                                    AndroidColor.BLACK,
+                                    null
+                                )
+                                "caption_box" -> androidx.media3.ui.CaptionStyleCompat(
+                                    AndroidColor.WHITE,
+                                    AndroidColor.parseColor("#99000000"),
+                                    AndroidColor.TRANSPARENT,
+                                    androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_NONE,
+                                    AndroidColor.BLACK,
+                                    null
+                                )
+                                else -> androidx.media3.ui.CaptionStyleCompat(
+                                    AndroidColor.WHITE,
+                                    AndroidColor.TRANSPARENT,
+                                    AndroidColor.TRANSPARENT,
+                                    androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW,
+                                    AndroidColor.BLACK,
+                                    null
+                                )
+                            }
+                            setStyle(styleCompat)
                             setFixedTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, state.subtitleSizeSp)
                         }
                     }
                 },
                 update = { view ->
+                    val styleCompat = when (state.subtitleStyle) {
+                        "yellow" -> androidx.media3.ui.CaptionStyleCompat(
+                            AndroidColor.YELLOW,
+                            AndroidColor.TRANSPARENT,
+                            AndroidColor.TRANSPARENT,
+                            androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW,
+                            AndroidColor.BLACK,
+                            null
+                        )
+                        "cyan" -> androidx.media3.ui.CaptionStyleCompat(
+                            AndroidColor.CYAN,
+                            AndroidColor.TRANSPARENT,
+                            AndroidColor.TRANSPARENT,
+                            androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_OUTLINE,
+                            AndroidColor.BLACK,
+                            null
+                        )
+                        "classic_outline" -> androidx.media3.ui.CaptionStyleCompat(
+                            AndroidColor.WHITE,
+                            AndroidColor.TRANSPARENT,
+                            AndroidColor.TRANSPARENT,
+                            androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_OUTLINE,
+                            AndroidColor.BLACK,
+                            null
+                        )
+                        "caption_box" -> androidx.media3.ui.CaptionStyleCompat(
+                            AndroidColor.WHITE,
+                            AndroidColor.parseColor("#99000000"),
+                            AndroidColor.TRANSPARENT,
+                            androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_NONE,
+                            AndroidColor.BLACK,
+                            null
+                        )
+                        else -> androidx.media3.ui.CaptionStyleCompat(
+                            AndroidColor.WHITE,
+                            AndroidColor.TRANSPARENT,
+                            AndroidColor.TRANSPARENT,
+                            androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW,
+                            AndroidColor.BLACK,
+                            null
+                        )
+                    }
+                    view.subtitleView?.setStyle(styleCompat)
                     view.subtitleView?.setFixedTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, state.subtitleSizeSp)
                 },
                 modifier = Modifier.fillMaxSize()
@@ -1706,6 +1823,46 @@ fun ExoVideoPlayer(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
+                            // Sub/Dub Quick Toggle Button
+                            Button(
+                                onClick = {
+                                    callbacks.onControlsInteraction()
+                                    val nextCat = if (state.activeCategory.equals("dub", ignoreCase = true)) "sub" else "dub"
+                                    callbacks.onAudioChange(nextCat)
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color.Black.copy(alpha = 0.5f),
+                                    contentColor = CrunchyrollOrange
+                                ),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, CrunchyrollOrange),
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
+                                modifier = Modifier
+                                    .height(32.dp)
+                                    .align(Alignment.CenterVertically)
+                            ) {
+                                Text(
+                                    text = if (state.activeCategory.equals("dub", ignoreCase = true)) "DUB" else "SUB",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+
+                            // In-Player Episode Selector Trigger
+                            IconButton(
+                                onClick = {
+                                    callbacks.onControlsInteraction()
+                                    callbacks.onShowEpisodesSelectorChange(true)
+                                },
+                                modifier = Modifier.size(48.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.List,
+                                    contentDescription = "Select Episode",
+                                    tint = CrunchyrollOrange,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+
                             if (callbacks.onNextEpisodeClick != null) {
                                 IconButton(
                                     onClick = {
@@ -1913,45 +2070,114 @@ fun ExoVideoPlayer(
                                 fontSize = 12.sp
                             )
 
-                            Slider(
-                                value = if (state.durationMs > 0) (displayPositionMs.toFloat() / state.durationMs.toFloat()) else 0f,
-                                onValueChange = { fraction ->
-                                    if (state.durationMs > 0) {
-                                        callbacks.onControlsInteraction()
-                                        val targetPos = (fraction * state.durationMs).toLong()
-                                        scrubbingPositionMs = targetPos
-                                    }
-                                },
-                                onValueChangeFinished = {
-                                    val finalPos = scrubbingPositionMs
-                                    if (finalPos != null && exoPlayer != null) {
-                                        exoPlayer.seekTo(finalPos)
-                                        callbacks.onPositionChanged(finalPos)
-                                    }
-                                    scrubbingPositionMs = null
-                                },
-                                colors = SliderDefaults.colors(
-                                    thumbColor = Color(0xFFF5A623),
-                                    activeTrackColor = Color(0xFFF5A623),
-                                    inactiveTrackColor = Color(0xFF4D4D4D)
-                                ),
-                                thumb = {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(14.dp)
-                                            .background(Color(0xFFF5A623), CircleShape)
-                                    )
-                                },
+                            Box(
                                 modifier = Modifier
                                     .weight(1f)
-                                    .padding(horizontal = 12.dp)
-                            )
+                                    .padding(horizontal = 12.dp),
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                Slider(
+                                    value = if (state.durationMs > 0) (displayPositionMs.toFloat() / state.durationMs.toFloat()) else 0f,
+                                    onValueChange = { fraction ->
+                                        if (state.durationMs > 0) {
+                                            callbacks.onControlsInteraction()
+                                            val targetPos = (fraction * state.durationMs).toLong()
+                                            scrubbingPositionMs = targetPos
+                                        }
+                                    },
+                                    onValueChangeFinished = {
+                                        val finalPos = scrubbingPositionMs
+                                        if (finalPos != null && exoPlayer != null) {
+                                            exoPlayer.seekTo(finalPos)
+                                            callbacks.onPositionChanged(finalPos)
+                                        }
+                                        scrubbingPositionMs = null
+                                    },
+                                    colors = SliderDefaults.colors(
+                                        thumbColor = Color(0xFFF5A623),
+                                        activeTrackColor = Color(0xFFF5A623),
+                                        inactiveTrackColor = Color(0xFF4D4D4D)
+                                    ),
+                                    thumb = {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(14.dp)
+                                                .background(Color(0xFFF5A623), CircleShape)
+                                        )
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+
+                                // Segment markers ticks overlay
+                                if (state.durationMs > 0) {
+                                    BoxWithConstraints(modifier = Modifier.fillMaxWidth().height(14.dp)) {
+                                        val width = maxWidth
+                                        if (state.skipTimes.introStart > 0) {
+                                            val introFraction = state.skipTimes.introStart.toFloat() / state.durationMs.toFloat()
+                                            if (introFraction in 0f..1f) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .offset(x = width * introFraction - 3.dp)
+                                                        .size(6.dp)
+                                                        .background(Color.White, CircleShape)
+                                                        .border(1.dp, CrunchyrollOrange, CircleShape)
+                                                        .align(Alignment.CenterStart)
+                                                )
+                                            }
+                                        }
+                                        if (state.skipTimes.introEnd > 0) {
+                                            val introEndFraction = state.skipTimes.introEnd.toFloat() / state.durationMs.toFloat()
+                                            if (introEndFraction in 0f..1f) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .offset(x = width * introEndFraction - 3.dp)
+                                                        .size(6.dp)
+                                                        .background(Color.White, CircleShape)
+                                                        .border(1.dp, CrunchyrollOrange, CircleShape)
+                                                        .align(Alignment.CenterStart)
+                                                )
+                                            }
+                                        }
+                                        if (state.skipTimes.outroStart > 0) {
+                                            val outroFraction = state.skipTimes.outroStart.toFloat() / state.durationMs.toFloat()
+                                            if (outroFraction in 0f..1f) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .offset(x = width * outroFraction - 3.dp)
+                                                        .size(6.dp)
+                                                        .background(Color.White, CircleShape)
+                                                        .border(1.dp, CrunchyrollOrange, CircleShape)
+                                                        .align(Alignment.CenterStart)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
 
                             Text(
                                 text = formatTime(state.durationMs),
                                 color = Color.White,
                                 fontSize = 12.sp
                             )
+
+                            Spacer(modifier = Modifier.width(4.dp))
+
+                            // Chapters trigger button
+                            IconButton(
+                                onClick = {
+                                    callbacks.onControlsInteraction()
+                                    showChaptersSelector = true
+                                },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Bookmarks,
+                                    contentDescription = "Chapters",
+                                    tint = CrunchyrollOrange,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -2035,6 +2261,133 @@ fun ExoVideoPlayer(
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold
                         )
+                    }
+                }
+            }
+
+            if (showChaptersSelector) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.85f))
+                        .clickable { showChaptersSelector = false },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Surface(
+                        color = Color(0xFF141414),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF333333)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth(if (state.isLandscape) 0.5f else 0.85f)
+                            .fillMaxHeight(0.7f)
+                            .clickable(enabled = false) {}
+                    ) {
+                        Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Episode Chapters",
+                                    color = Color.White,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                IconButton(onClick = { showChaptersSelector = false }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Close",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            
+                            HorizontalDivider(color = Color(0xFF222222), modifier = Modifier.padding(vertical = 8.dp))
+                            
+                            val chapters = remember(state.skipTimes, state.durationMs) {
+                                val list = mutableListOf<SegmentChapter>()
+                                list.add(SegmentChapter("Hook / Prologue", 0L))
+                                
+                                if (state.skipTimes.introStart > 0 && state.skipTimes.introEnd > state.skipTimes.introStart) {
+                                    list.add(SegmentChapter("Opening Song (Intro)", state.skipTimes.introStart))
+                                    list.add(SegmentChapter("Canon Episode Content", state.skipTimes.introEnd))
+                                } else {
+                                    list.add(SegmentChapter("Episode Intro", 90000L))
+                                    list.add(SegmentChapter("Main Story Content", 180000L))
+                                }
+                                
+                                if (state.durationMs > 720000L) {
+                                    list.add(SegmentChapter("Midpoint Eyecatch", 720000L))
+                                }
+                                
+                                if (state.skipTimes.outroStart > 0 && state.skipTimes.outroEnd > state.skipTimes.outroStart) {
+                                    list.add(SegmentChapter("Ending Credits", state.skipTimes.outroStart))
+                                    list.add(SegmentChapter("Next Episode Preview", state.skipTimes.outroEnd))
+                                } else if (state.durationMs > 1300000L) {
+                                    list.add(SegmentChapter("Ending Theme Credits", 1290000L))
+                                    list.add(SegmentChapter("Next Episode Teaser", 1380000L))
+                                }
+                                
+                                list.filter { it.startMs < state.durationMs }
+                            }
+                            
+                            LazyColumn(
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                items(chapters) { chap ->
+                                    val isActive = exoPlayer?.currentPosition?.let { currentPos ->
+                                        val index = chapters.indexOf(chap)
+                                        val nextStart = if (index < chapters.size - 1) chapters[index + 1].startMs else state.durationMs
+                                        currentPos >= chap.startMs && currentPos < nextStart
+                                    } ?: false
+                                    
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(
+                                                if (isActive) Color(0xFF2E1A0C) else Color(0xFF1D1D1D),
+                                                RoundedCornerShape(8.dp)
+                                            )
+                                            .border(
+                                                1.dp,
+                                                if (isActive) CrunchyrollOrange else Color(0xFF2C2C2C),
+                                                RoundedCornerShape(8.dp)
+                                            )
+                                            .clickable {
+                                                exoPlayer?.seekTo(chap.startMs)
+                                                callbacks.onPositionChanged(chap.startMs)
+                                                showChaptersSelector = false
+                                            }
+                                            .padding(14.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isActive) Icons.Default.PlayCircle else Icons.Default.PlayArrow,
+                                            contentDescription = null,
+                                            tint = if (isActive) CrunchyrollOrange else Color.LightGray,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(12.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = chap.title,
+                                                color = if (isActive) CrunchyrollOrange else Color.White,
+                                                fontSize = 14.sp,
+                                                fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal
+                                            )
+                                            Text(
+                                                text = formatTime(chap.startMs),
+                                                color = Color.Gray,
+                                                fontSize = 11.sp
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -2280,6 +2633,20 @@ fun PlaybackSettingsOverlay(
             )
             HorizontalDivider(color = Color(0xFF1F1F1F), thickness = 1.dp)
 
+            // Subtitle Style Row
+            SettingsClickableRow(
+                label = "Subtitle Style",
+                value = when (state.subtitleStyle) {
+                    "classic_outline" -> "White with Outline"
+                    "yellow" -> "Crunchyroll Yellow"
+                    "cyan" -> "Neon Cyan Glow"
+                    "caption_box" -> "Black Background Box"
+                    else -> "White Drop Shadow"
+                },
+                onClick = { callbacks.onShowSubtitleStyleDialogChange(true) }
+            )
+            HorizontalDivider(color = Color(0xFF1F1F1F), thickness = 1.dp)
+
             // Quality Row
             SettingsClickableRow(
                 label = "Quality",
@@ -2463,6 +2830,33 @@ fun PlaybackSettingsOverlay(
                 }
             }
         }
+
+        if (state.showSubtitleStyleDialog) {
+            SettingsDialog(
+                title = "Select Subtitle Style",
+                onDismiss = { callbacks.onShowSubtitleStyleDialogChange(false) }
+            ) {
+                val styles = listOf(
+                    "classic_outline" to "White with Outline",
+                    "yellow" to "Crunchyroll Yellow",
+                    "cyan" to "Neon Cyan Glow",
+                    "caption_box" to "Black Background Box",
+                    "default" to "White Drop Shadow"
+                )
+                LazyColumn {
+                    items(styles) { (key, label) ->
+                        SettingsDialogRow(
+                            label = label,
+                            selected = state.subtitleStyle == key,
+                            onClick = {
+                                callbacks.onSubtitleStyleChange(key)
+                                callbacks.onShowSubtitleStyleDialogChange(false)
+                            }
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -2580,3 +2974,154 @@ private fun SettingsDialogRow(
         Text(text = label, color = Color.White, fontSize = 16.sp)
     }
 }
+
+@Composable
+fun InPlayerEpisodeSelectorOverlay(
+    state: PlayerScreenState,
+    callbacks: PlayerCallbacks,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.85f))
+            .clickable(enabled = true, onClick = { callbacks.onShowEpisodesSelectorChange(false) })
+    ) {
+        Surface(
+            color = Color(0xFF141414),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF2C2C2C)),
+            shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+            modifier = Modifier
+                .fillMaxWidth(if (state.isLandscape) 0.5f else 1f)
+                .fillMaxHeight(if (state.isLandscape) 1f else 0.65f)
+                .align(if (state.isLandscape) Alignment.CenterEnd else Alignment.BottomCenter)
+                .clickable(enabled = false) {}
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Episodes (${state.episodes.size})",
+                        color = Color.White,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    IconButton(onClick = { callbacks.onShowEpisodesSelectorChange(false) }) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Close",
+                            tint = Color.White
+                        )
+                    }
+                }
+                
+                HorizontalDivider(color = Color(0xFF222222))
+                
+                if (state.episodes.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("No episodes available", color = Color.Gray)
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        items(state.episodes) { ep ->
+                            val isCurrent = state.currentEpisode?.id == ep.id
+                            Surface(
+                                color = if (isCurrent) Color(0xFF2E1A0C) else Color(0xFF1D1D1D),
+                                border = androidx.compose.foundation.BorderStroke(
+                                    1.dp,
+                                    if (isCurrent) CrunchyrollOrange else Color(0xFF2C2C2C)
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        callbacks.onShowEpisodesSelectorChange(false)
+                                        callbacks.onEpisodeSelect(ep)
+                                    }
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .background(
+                                                if (isCurrent) CrunchyrollOrange else Color(0xFF2C2C2C),
+                                                CircleShape
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = ep.number.toString(),
+                                            color = Color.White,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 14.sp
+                                        )
+                                    }
+                                    
+                                    Spacer(modifier = Modifier.width(16.dp))
+                                    
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = ep.title.ifEmpty { "Episode ${ep.number}" },
+                                            color = if (isCurrent) CrunchyrollOrange else Color.White,
+                                            fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                            fontSize = 14.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (ep.isFiller) {
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Box(
+                                                modifier = Modifier
+                                                    .background(Color(0xFF8B0000), RoundedCornerShape(4.dp))
+                                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                            ) {
+                                                Text(
+                                                    text = "FILLER",
+                                                    color = Color.White,
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                        }
+                                    }
+                                    
+                                    if (isCurrent) {
+                                        Icon(
+                                            imageVector = Icons.Default.PlayArrow,
+                                            contentDescription = "Playing",
+                                            tint = CrunchyrollOrange,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+data class SegmentChapter(val title: String, val startMs: Long)
