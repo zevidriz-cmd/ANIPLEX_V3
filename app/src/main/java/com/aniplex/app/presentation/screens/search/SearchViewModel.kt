@@ -58,6 +58,9 @@ class SearchViewModel @Inject constructor(
     private var isCurrentlyLoadingNextPage = false
     private val allResults = mutableListOf<Anime>()
 
+    private var searchJob: kotlinx.coroutines.Job? = null
+    private var suggestionsJob: kotlinx.coroutines.Job? = null
+
     private fun levenshteinDistance(s1: String, s2: String): Int {
         val len1 = s1.length
         val len2 = s2.length
@@ -144,7 +147,7 @@ class SearchViewModel @Inject constructor(
         _recentSearches.value = preferenceManager.getRecentSearches()
 
         // Redesigned with combined reactive flows to dynamically support:
-        // 1. Live debounced query suggestions
+        // 1. Live debounced query suggestions in parallel (separate non-blocking job)
         // 2. Real-time automatic filter applications (reactive updates)
         // 3. Proper search query scoping when combining filters
         viewModelScope.launch {
@@ -169,18 +172,21 @@ class SearchViewModel @Inject constructor(
             .collectLatest { trigger ->
                 val q = trigger.query.trim()
                 
-                // Keep the live suggestions updated in parallel
+                // Keep the live suggestions updated in parallel (does NOT suspend the main flow!)
+                suggestionsJob?.cancel()
                 if (q.length >= 2) {
-                    repository.getSuggestions(q).collect { result ->
-                        if (result is Result.Success) {
-                            val ranked = result.data.map { anime ->
-                                val score = calculateMatchScore(q, anime)
-                                anime to score
-                            }.sortedWith(
-                                compareByDescending<Pair<Anime, Int>> { it.second }
-                                    .thenBy { it.first.title }
-                            ).map { it.first }
-                            _suggestions.value = ranked
+                    suggestionsJob = viewModelScope.launch {
+                        repository.getSuggestions(q).collect { result ->
+                            if (result is Result.Success) {
+                                val ranked = result.data.map { anime ->
+                                    val score = calculateMatchScore(q, anime)
+                                    anime to score
+                                }.sortedWith(
+                                    compareByDescending<Pair<Anime, Int>> { it.second }
+                                        .thenBy { it.first.title }
+                                ).map { it.first }
+                                _suggestions.value = ranked
+                            }
                         }
                     }
                 } else {
@@ -195,6 +201,7 @@ class SearchViewModel @Inject constructor(
                 } else {
                     _suggestions.value = emptyList()
                     _uiState.value = SearchUiState.Idle
+                    searchJob?.cancel()
                 }
             }
         }
@@ -222,7 +229,10 @@ class SearchViewModel @Inject constructor(
 
         val hasFilters = typeVal != null || statusVal != null || sortVal != null || langVal != null || genresVal.isNotEmpty()
 
-        viewModelScope.launch {
+        // Cancel previous search job to prevent API rate limiting, network hammering and overlapping race conditions
+        searchJob?.cancel()
+
+        searchJob = viewModelScope.launch {
             val flowResult = if (queryVal.isNotEmpty()) {
                 // If there is an active search query, always use the search endpoint to preserve the query scope!
                 repository.search(queryVal, currentPage)
@@ -285,6 +295,11 @@ class SearchViewModel @Inject constructor(
                         }
 
                         allResults.addAll(rankedItems)
+                        
+                        // Deduplicate entries by ID to ensure a completely pristine visual grid
+                        val deDuplicated = allResults.distinctBy { it.id }
+                        allResults.clear()
+                        allResults.addAll(deDuplicated)
                         
                         if (allResults.isEmpty()) {
                             _uiState.value = SearchUiState.Empty

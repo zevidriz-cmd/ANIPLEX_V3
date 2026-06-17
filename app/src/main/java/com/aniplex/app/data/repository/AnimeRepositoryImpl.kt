@@ -297,128 +297,302 @@ class AnimeRepositoryImpl @Inject constructor(
     override fun search(query: String, page: Int): Flow<Result<List<Anime>>> = flow {
         emit(Result.Loading)
         
-        // 1. Try fetching via Jikan (MAL) for overwhelmingly superior search accuracy & relevance
+        // 1. Try fetching via AniList GraphQL
         try {
-            val JIKAN_API_URL = "https://api.jikan.moe/v4/anime"
-            val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
-            val url = "$JIKAN_API_URL?q=$encodedQuery&page=$page"
-            
-            val request = okhttp3.Request.Builder().url(url).build()
-            val resultJson = kotlinx.coroutines.withContext(Dispatchers.IO) {
-                val okResponse = okHttpClient.newCall(request).execute()
-                if (okResponse.isSuccessful) okResponse.body?.string() else null
-            }
-            if (!resultJson.isNullOrEmpty()) {
-                val parsed = gson.fromJson(resultJson, JikanSearchRes::class.java)
-                val mapped = parsed.data?.mapNotNull { item ->
-                    if (item.mal_id == null) return@mapNotNull null
-                    Anime(
-                        id = "mal-${item.mal_id}",
-                        title = item.title ?: "Unknown",
-                        poster = item.images?.webp?.large_image_url ?: item.images?.webp?.image_url ?: "",
-                        type = item.type ?: "TV",
-                        duration = item.duration ?: "",
-                        subEpisodes = item.episodes ?: 0,
-                        dubEpisodes = 0,
-                        rate = item.score?.toString() ?: ""
-                    )
-                } ?: emptyList()
-                
-                if (mapped.isNotEmpty()) {
-                    emit(Result.Success(mapped))
-                    return@flow
+            val queryStr = """
+                query (${'$'}search: String, ${'$'}page: Int, ${'$'}perPage: Int) {
+                  Page(page: ${'$'}page, perPage: ${'$'}perPage) {
+                    media(search: ${'$'}search, type: ANIME) {
+                      id
+                      idMal
+                      title {
+                        english
+                        romaji
+                        userPreferred
+                      }
+                      coverImage {
+                        extraLarge
+                        large
+                        medium
+                      }
+                      type
+                      format
+                      duration
+                      episodes
+                      averageScore
+                    }
+                  }
+                }
+            """.trimIndent()
+
+            val variables = mapOf("search" to query, "page" to page, "perPage" to 15)
+            val payload = mapOf("query" to queryStr, "variables" to variables)
+            val jsonPayload = gson.toJson(payload)
+
+            val jsonString = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                val url = java.net.URL("https://graphql.anilist.co")
+                val connection = url.openConnection() as java.net.HttpURLConnection
+                connection.requestMethod = "POST"
+                connection.setRequestProperty("Content-Type", "application/json")
+                connection.setRequestProperty("Accept", "application/json")
+                connection.setRequestProperty("User-Agent", "Mozilla/5.0")
+                connection.doOutput = true
+                connection.connectTimeout = 8000
+                connection.readTimeout = 8000
+
+                connection.outputStream.use { os ->
+                    val input = jsonPayload.toByteArray(charset("utf-8"))
+                    os.write(input, 0, input.size)
+                }
+
+                if (connection.responseCode == 200) {
+                    connection.inputStream.bufferedReader().use { it.readText() }
+                } else {
+                    val errorText = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                    throw java.io.IOException("AniList Http Error ${connection.responseCode}: $errorText")
                 }
             }
+
+            val parsed = gson.fromJson(jsonString, AniListSearchResponse::class.java)
+            val mapped = parsed.data?.Page?.media?.mapNotNull { item ->
+                val malId = item.idMal
+                val idString = if (malId != null && malId > 0) "mal-$malId" else "anilist-${item.id}"
+                Anime(
+                    id = idString,
+                    title = item.title?.english ?: item.title?.userPreferred ?: item.title?.romaji ?: "Unknown",
+                    poster = item.coverImage?.extraLarge ?: item.coverImage?.large ?: "",
+                    type = item.format ?: item.type ?: "TV",
+                    duration = if (item.duration != null) "${item.duration}m" else "",
+                    subEpisodes = item.episodes ?: 0,
+                    dubEpisodes = 0,
+                    rate = if (item.averageScore != null) String.format(java.util.Locale.US, "%.2f", item.averageScore / 10.0) else ""
+                )
+            } ?: emptyList()
+
+            if (mapped.isNotEmpty()) {
+                emit(Result.Success(mapped))
+                return@flow
+            }
         } catch (e: Exception) {
-            // Silently fallback to Aniplex Proxy on Jikan error
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            android.util.Log.e("AnimeRepositoryImpl", "AniList search failed: ${e.message}")
         }
         
-        // 2. Fallback to Aniplex proxy API
-        try {
-            val response = apiService.search(query, page)
-            if (response.success) {
-                emit(Result.Success(response.data.animes?.map { it.toDomain() } ?: emptyList()))
-            } else {
-                emit(Result.Error("Search failed"))
+        // 2. Try Jikan as fallback (only for query strings longer than or equal to 3 characters)
+        if (query.trim().length >= 3) {
+            try {
+                val JIKAN_API_URL = "https://api.jikan.moe/v4/anime"
+                val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
+                val url = "$JIKAN_API_URL?q=$encodedQuery&page=$page"
+                
+                val request = okhttp3.Request.Builder().url(url).build()
+                val resultJson = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                    val okResponse = okHttpClient.newCall(request).execute()
+                    if (okResponse.isSuccessful) okResponse.body?.string() else null
+                }
+                if (!resultJson.isNullOrEmpty()) {
+                    val parsed = gson.fromJson(resultJson, JikanSearchRes::class.java)
+                    val mapped = parsed.data?.mapNotNull { item ->
+                        if (item.mal_id == null) return@mapNotNull null
+                        Anime(
+                            id = "mal-${item.mal_id}",
+                            title = item.title ?: "Unknown",
+                            poster = item.images?.webp?.large_image_url ?: item.images?.webp?.image_url ?: "",
+                            type = item.type ?: "TV",
+                            duration = item.duration ?: "",
+                            subEpisodes = item.episodes ?: 0,
+                            dubEpisodes = 0,
+                            rate = item.score?.toString() ?: ""
+                        )
+                    } ?: emptyList()
+                    
+                    if (mapped.isNotEmpty()) {
+                        emit(Result.Success(mapped))
+                        return@flow
+                    }
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
             }
-        } catch (e: Exception) {
-            emit(Result.Error(e.localizedMessage ?: "Search request failed"))
         }
+        
+        // 3. Fallback to Aniplex proxy API (only for query strings longer than or equal to 3 characters)
+        if (query.trim().length >= 3) {
+            try {
+                val response = apiService.search(query, page)
+                if (response.success) {
+                    emit(Result.Success(response.data.animes?.map { it.toDomain() } ?: emptyList()))
+                    return@flow
+                } else {
+                    emit(Result.Error("Search failed"))
+                    return@flow
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                emit(Result.Error(e.localizedMessage ?: "Search request failed"))
+                return@flow
+            }
+        }
+
+        // If we reached here peacefully and nothing emitted yet, return empty list instead of throwing an error
+        emit(Result.Success(emptyList()))
     }
 
-    override fun searchHiAnime(query: String): Flow<Result<List<Anime>>> = flow {
-        emit(Result.Loading)
-        try {
-            val response = apiService.search(query, 1)
-            if (response.success) {
-                emit(Result.Success(response.data.animes?.map { it.toDomain() } ?: emptyList()))
-            } else {
-                emit(Result.Error("Search failed"))
-            }
-        } catch (e: Exception) {
-            emit(Result.Error(e.localizedMessage ?: "Search request failed"))
-        }
-    }.flowOn(Dispatchers.IO)
+    override fun searchHiAnime(query: String): Flow<Result<List<Anime>>> = search(query, 1)
 
     override fun getSuggestions(query: String): Flow<Result<List<Anime>>> = flow {
         emit(Result.Loading)
         
+        // 1. Try fetching via AniList GraphQL
         try {
-            val JIKAN_API_URL = "https://api.jikan.moe/v4/anime"
-            val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
-            val url = "$JIKAN_API_URL?q=$encodedQuery&limit=10"
-            
-            val request = okhttp3.Request.Builder().url(url).build()
-            val resultJson = kotlinx.coroutines.withContext(Dispatchers.IO) {
-                val okResponse = okHttpClient.newCall(request).execute()
-                if (okResponse.isSuccessful) okResponse.body?.string() else null
-            }
-            if (!resultJson.isNullOrEmpty()) {
-                val parsed = gson.fromJson(resultJson, JikanSearchRes::class.java)
-                val mapped = parsed.data?.mapNotNull { item ->
-                    if (item.mal_id == null) return@mapNotNull null
-                    Anime(
-                        id = "mal-${item.mal_id}",
-                        title = item.title ?: "Unknown",
-                        poster = item.images?.webp?.large_image_url ?: item.images?.webp?.image_url ?: "",
-                        type = item.type ?: "TV",
-                        duration = item.duration ?: "",
-                        subEpisodes = item.episodes ?: 0,
-                        dubEpisodes = 0,
-                        rate = item.score?.toString() ?: ""
-                    )
-                } ?: emptyList()
-                if (mapped.isNotEmpty()) {
-                    emit(Result.Success(mapped))
-                    return@flow
+            val queryStr = """
+                query (${'$'}search: String, ${'$'}page: Int, ${'$'}perPage: Int) {
+                  Page(page: ${'$'}page, perPage: ${'$'}perPage) {
+                    media(search: ${'$'}search, type: ANIME) {
+                      id
+                      idMal
+                      title {
+                        english
+                        romaji
+                        userPreferred
+                      }
+                      coverImage {
+                        extraLarge
+                        large
+                        medium
+                      }
+                      type
+                      format
+                      duration
+                      episodes
+                      averageScore
+                    }
+                  }
+                }
+            """.trimIndent()
+
+            val variables = mapOf("search" to query, "page" to 1, "perPage" to 10)
+            val payload = mapOf("query" to queryStr, "variables" to variables)
+            val jsonPayload = gson.toJson(payload)
+
+            val jsonString = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                val url = java.net.URL("https://graphql.anilist.co")
+                val connection = url.openConnection() as java.net.HttpURLConnection
+                connection.requestMethod = "POST"
+                connection.setRequestProperty("Content-Type", "application/json")
+                connection.setRequestProperty("Accept", "application/json")
+                connection.setRequestProperty("User-Agent", "Mozilla/5.0")
+                connection.doOutput = true
+                connection.connectTimeout = 6000
+                connection.readTimeout = 6000
+
+                connection.outputStream.use { os ->
+                    val input = jsonPayload.toByteArray(charset("utf-8"))
+                    os.write(input, 0, input.size)
+                }
+
+                if (connection.responseCode == 200) {
+                    connection.inputStream.bufferedReader().use { it.readText() }
+                } else {
+                    val errorText = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                    throw java.io.IOException("AniList Http Error ${connection.responseCode}: $errorText")
                 }
             }
-        } catch (e: Exception) {
-            // Silently ignore
-        }
-        
-        try {
-            val response = apiService.getSuggestions(query)
-            if (response.success) {
-                val list = response.data.suggestions?.map {
-                    Anime(
-                        id = it.id,
-                        title = it.name,
-                        poster = it.poster,
-                        type = it.moreInfo?.firstOrNull() ?: "",
-                        duration = it.moreInfo?.getOrNull(1) ?: "",
-                        subEpisodes = 0,
-                        dubEpisodes = 0,
-                        rate = ""
-                    )
-                } ?: emptyList()
-                emit(Result.Success(list))
-            } else {
-                emit(Result.Error("Suggestions failed"))
+
+            val parsed = gson.fromJson(jsonString, AniListSearchResponse::class.java)
+            val mapped = parsed.data?.Page?.media?.mapNotNull { item ->
+                val malId = item.idMal
+                val idString = if (malId != null && malId > 0) "mal-$malId" else "anilist-${item.id}"
+                Anime(
+                    id = idString,
+                    title = item.title?.english ?: item.title?.userPreferred ?: item.title?.romaji ?: "Unknown",
+                    poster = item.coverImage?.extraLarge ?: item.coverImage?.large ?: "",
+                    type = item.format ?: item.type ?: "TV",
+                    duration = if (item.duration != null) "${item.duration}m" else "",
+                    subEpisodes = item.episodes ?: 0,
+                    dubEpisodes = 0,
+                    rate = if (item.averageScore != null) String.format(java.util.Locale.US, "%.2f", item.averageScore / 10.0) else ""
+                )
+            } ?: emptyList()
+
+            if (mapped.isNotEmpty()) {
+                emit(Result.Success(mapped))
+                return@flow
             }
         } catch (e: Exception) {
-            emit(Result.Error(e.localizedMessage ?: "Suggestions failed"))
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            android.util.Log.e("AnimeRepositoryImpl", "AniList suggestions failed: ${e.message}")
         }
+
+        // 2. Try Jikan as fallback (only for queries longer than or equal to 3 characters)
+        if (query.trim().length >= 3) {
+            try {
+                val JIKAN_API_URL = "https://api.jikan.moe/v4/anime"
+                val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
+                val url = "$JIKAN_API_URL?q=$encodedQuery&limit=10"
+                
+                val request = okhttp3.Request.Builder().url(url).build()
+                val resultJson = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                    val okResponse = okHttpClient.newCall(request).execute()
+                    if (okResponse.isSuccessful) okResponse.body?.string() else null
+                }
+                if (!resultJson.isNullOrEmpty()) {
+                    val parsed = gson.fromJson(resultJson, JikanSearchRes::class.java)
+                    val mapped = parsed.data?.mapNotNull { item ->
+                        if (item.mal_id == null) return@mapNotNull null
+                        Anime(
+                            id = "mal-${item.mal_id}",
+                            title = item.title ?: "Unknown",
+                            poster = item.images?.webp?.large_image_url ?: item.images?.webp?.image_url ?: "",
+                            type = item.type ?: "TV",
+                            duration = item.duration ?: "",
+                            subEpisodes = item.episodes ?: 0,
+                            dubEpisodes = 0,
+                            rate = item.score?.toString() ?: ""
+                        )
+                    } ?: emptyList()
+                    if (mapped.isNotEmpty()) {
+                        emit(Result.Success(mapped))
+                        return@flow
+                    }
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+            }
+        }
+        
+        // 3. Last resort fallback to proxy suggestions (only for queries longer than or equal to 3 characters)
+        if (query.trim().length >= 3) {
+            try {
+                val response = apiService.getSuggestions(query)
+                if (response.success) {
+                    val list = response.data.suggestions?.map {
+                        Anime(
+                            id = it.id,
+                            title = it.name,
+                            poster = it.poster,
+                            type = it.moreInfo?.firstOrNull() ?: "",
+                            duration = it.moreInfo?.getOrNull(1) ?: "",
+                            subEpisodes = 0,
+                            dubEpisodes = 0,
+                            rate = ""
+                        )
+                    } ?: emptyList()
+                    emit(Result.Success(list))
+                    return@flow
+                } else {
+                    emit(Result.Error("Suggestions failed"))
+                    return@flow
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                emit(Result.Error(e.localizedMessage ?: "Suggestions failed"))
+                return@flow
+            }
+        }
+
+        // Return empty list gracefully if reached here
+        emit(Result.Success(emptyList()))
     }
 
     override fun getAnimeByCategory(category: String, page: Int): Flow<Result<List<Anime>>> = flow {
@@ -1258,4 +1432,28 @@ private data class JikanEpisodeItem(
 private data class JikanPagination(
     val last_visible_page: Int?,
     val has_next_page: Boolean?
+)
+
+private data class AniListSearchResponse(
+    val data: AniListSearchData?
+)
+
+private data class AniListSearchData(
+    val Page: AniListSearchPage?
+)
+
+private data class AniListSearchPage(
+    val media: List<AniListMedia>?
+)
+
+private data class AniListMedia(
+    val id: Int?,
+    val idMal: Int?,
+    val title: AniTitle?,
+    val coverImage: AniCoverImage?,
+    val type: String?,
+    val format: String?,
+    val duration: Int?,
+    val episodes: Int?,
+    val averageScore: Double?
 )
